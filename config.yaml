@@ -1,0 +1,199 @@
+# ============================================================
+# Up-to-Celo — Configuration File
+# "Be up-to-date on the Celo Blockchain"
+# ============================================================
+
+bot:
+  name: "Up-to-Celo"
+  tagline: "Be up-to-date on the Celo Blockchain"
+  admin_chat_id: ${ADMIN_CHAT_ID}
+
+digest_schedule:
+  timezone: "America/Fortaleza"
+  time: "08:30"
+  template: "daily"
+  misfire_grace_time: 120
+
+rss_feeds:
+  - url: "https://blog.celo.org/feed"
+    source: "Celo Blog"
+    source_app: "celo_network"
+    category: "network"
+  - url: "https://forum.celo.org/latest.rss"
+    source: "Celo Forum"
+    source_app: "celo_network"
+    category: "network"
+  - url: "https://github.com/celo-org/celo-monorepo/releases.atom"
+    source: "Celo Monorepo"
+    source_app: "celo_network"
+    category: "network"
+  - url: "https://github.com/celo-org/celo-proposals/releases.atom"
+    source: "Celo Governance"
+    source_app: "celo_reserve"
+    category: "network"
+  - url: "https://github.com/celo-org/valora-wallet/releases.atom"
+    source: "Valora"
+    source_app: "valora"
+    category: "payments"
+  - url: "https://github.com/celo-org/minipay-template/releases.atom"
+    source: "MiniPay"
+    source_app: "minipay"
+    category: "payments"
+  - url: "https://github.com/mento-protocol/mento-core/releases.atom"
+    source: "Mento"
+    source_app: "mento"
+    category: "defi"
+  - url: "https://github.com/Ubeswap/ubeswap/releases.atom"
+    source: "Ubeswap"
+    source_app: "ubeswap"
+    category: "defi"
+  - url: "https://blog.toucan.earth/rss/"
+    source: "Toucan Blog"
+    source_app: "toucan"
+    category: "refi"
+  - url: "https://github.com/impactmarket/app/releases.atom"
+    source: "ImpactMarket"
+    source_app: "impactmarket"
+    category: "social"
+
+twitter_accounts:
+  - account: "CeloOrg"
+    source_app: "celo_network"
+    category: "network"
+  - account: "CeloDevs"
+    source_app: "celo_network"
+    category: "network"
+  - account: "CeloPG"
+    source_app: "celo_reserve"
+    category: "network"
+  - account: "MiniPay"
+    source_app: "minipay"
+    category: "payments"
+  - account: "valoraapp"
+    source_app: "valora"
+    category: "payments"
+  - account: "ubeswap"
+    source_app: "ubeswap"
+    category: "defi"
+  - account: "mento_labs"
+    source_app: "mento"
+    category: "defi"
+  - account: "ImpactMarket"
+    source_app: "impactmarket"
+    category: "social"
+  - account: "MasaFinance"
+    source_app: "masa"
+    category: "social"
+  - account: "ToucanProtocol"
+    source_app: "toucan"
+    category: "refi"
+
+nitter_instances:
+  - "https://nitter.net"
+  - "https://nitter.privacydev.net"
+  - "https://nitter.poast.org"
+
+celo_rpc:
+  primary: "https://forno.celo.org"
+  fallback: "https://rpc.ankr.com/celo"
+  timeout_seconds: 10
+
+celo_contracts:
+  cUSD:  "0x765DE816845861e75A25fCA122bb6898B8B1282a"
+  cEUR:  "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73"
+  cREAL: "0xe8537a3d056DA446677B9E9d6c5dB704EaAb4787"
+
+coingecko:
+  celo_id: "celo"
+  ecosystem_category: "celo-ecosystem"
+  cache_ttl_minutes: 30
+  timeout_seconds: 10
+
+defillama:
+  chain: "Celo"
+  cache_ttl_minutes: 30
+
+groq:
+  models:
+    - "llama-3.3-70b-versatile"
+    - "llama-3.1-8b-instant"
+    - "mixtral-8x7b-32768"
+  max_tokens_digest: 600
+  max_tokens_ask: 200
+  temperature: 0.3
+  timeout_seconds: 30
+
+cache:
+  rss_ttl_minutes: 30
+  twitter_ttl_minutes: 15
+  market_ttl_minutes: 30
+  onchain_ttl_minutes: 5
+  snapshot_path: "data/cache/full_snapshot.json"
+  market_path: "data/cache/market_cache.json"
+  rss_path: "data/cache/rss_cache.json"
+
+rate_limits:
+  digest_manual_cooldown_minutes: 60
+  ask_max_per_hour: 5
+  ask_session_ttl_minutes: 10
+  broadcast_msgs_per_second: 30
+
+apps_available:
+  payments:
+    - minipay
+    - valora
+    - halofi
+    - hurupay
+  defi:
+    - ubeswap
+    - moola
+    - mento
+    - symmetric
+    - mobius
+    - knox
+    - equalizer
+    - uniswap_celo
+  onramp:
+    - celo_cashflow
+    - unipos
+  nfts:
+    - octoplace
+    - hypermove
+    - truefeedback
+  refi:
+    - toucan
+    - toucan_refi
+  social:
+    - impactmarket
+    - masa
+  network:
+    - celo_network
+    - celo_reserve
+
+digest:
+  max_items_per_category: 3
+  max_context_tokens: 3000
+  category_priority:
+    - network
+    - payments
+    - defi
+    - onramp
+    - refi
+    - social
+    - nfts
+
+logging:
+  level: "INFO"
+  file: "data/logs/bot.log"
+  error_file: "data/logs/errors.log"
+  max_bytes: 10485760
+  backup_count: 5
+
+health_check:
+  interval_seconds: 60
+  unhealthy_threshold: 2
+  status_file: "data/status.json"
+
+database:
+  path: "data/uptocelo.db"
+  url: "sqlite+aiosqlite:///data/uptocelo.db"

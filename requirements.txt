@@ -1,0 +1,34 @@
+# Telegram Bot (Bot API — not userbot)
+python-telegram-bot==21.*
+
+# AI / LLM
+groq>=1.0.0
+
+# RSS Parsing
+feedparser==6.*
+
+# Blockchain / On-chain
+web3==6.*
+
+# Async HTTP client
+aiohttp==3.9.*
+
+# Scheduler
+APScheduler==3.10.*
+
+# Database
+SQLAlchemy==2.0.*
+aiosqlite==0.19.*
+
+# Config & Env
+python-dotenv==1.0.*
+pyyaml==6.*
+
+# Timezone
+pytz
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+aioresponses
