@@ -8,18 +8,21 @@ import signal
 import sys
 
 from telegram import Update
-from telegram.ext import Application, ApplicationBuilder
+from telegram.ext import Application, ApplicationBuilder, MessageHandler, filters
 
 from src.bot.callbacks import callback_query_handler
 from src.bot.handlers import (
     ask_handler,
     confirm_payment_handler,
     digest_handler,
+    free_text_handler,
     help_handler,
+    inline_handler,
     premium_handler,
     settings_handler,
     start_handler,
     status_handler,
+    stop_handler,
     subscribe_handler,
     unsubscribe_handler,
 )
@@ -41,14 +44,14 @@ async def on_startup(application: Application) -> None:
     Order: init_db (tables ready) → scheduler.start() → downgrade_expired_users().
     """
     await db.init_db()
-    scheduler.start()
+    await scheduler.start(application)
     await db.downgrade_expired_users()
     logger.info("[STARTUP] DB initialized, scheduler started, expired users downgraded")
 
 
 async def on_shutdown(application: Application) -> None:
     """Run once after the Application has stopped."""
-    scheduler.shutdown()
+    await scheduler.shutdown()
     logger.info("[SHUTDOWN] Up-to-Celo bot shutting down")
 
 
@@ -80,9 +83,18 @@ def build_application() -> Application:
     application.add_handler(subscribe_handler)
     application.add_handler(unsubscribe_handler)
     application.add_handler(ask_handler)
+    application.add_handler(stop_handler)
 
     # Callback query router (inline keyboards)
     application.add_handler(callback_query_handler)
+
+    # Inline query handler (BotFather → Inline Mode must be enabled)
+    application.add_handler(inline_handler)
+
+    # Free-text handler: only active when ask session exists (checked inside handler)
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, free_text_handler)
+    )
 
     return application
 
@@ -104,7 +116,7 @@ def main() -> None:
     # Step 3: confirm config loaded successfully
     bot_name = CONFIG.get("bot", {}).get("name", "Up-to-Celo")
     digest_time = CONFIG.get("digest_schedule", {}).get("time", "08:30")
-    digest_tz = CONFIG.get("digest_schedule", {}).get("timezone", "America/Fortaleza")
+    digest_tz = CONFIG.get("digest_schedule", {}).get("timezone", "Europe/Madrid")
     logger.info(
         f"[CONFIG] Loaded | bot={bot_name} | digest={digest_time} {digest_tz}"
     )

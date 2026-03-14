@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from src.bot.keyboards import APPS_BY_CATEGORY
+from src.database.models import APPS_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class DigestBuilder:
         Build structured context string from fetcher snapshot and user app filters.
 
         Sync-only: no I/O, processes data in memory. If user_apps_by_category is
-        empty or None, all apps from APPS_BY_CATEGORY are considered enabled.
+        empty or None, all apps from APPS_AVAILABLE are considered enabled.
 
         Args:
             snapshot: Output of FetcherManager.fetch_all_sources() with keys
@@ -70,7 +70,7 @@ class DigestBuilder:
         # Step 2 — Determine enabled apps
         if not user_apps_by_category:
             enabled_apps: set[str] = set()
-            for apps in APPS_BY_CATEGORY.values():
+            for apps in APPS_AVAILABLE.values():
                 enabled_apps.update(apps)
         else:
             enabled_apps = {

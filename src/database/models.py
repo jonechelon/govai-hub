@@ -1,58 +1,99 @@
 # src/database/models.py
-# Up-to-Celo — SQLAlchemy ORM models
+# Up-to-Celo — SQLAlchemy ORM models (P23 — single source of truth)
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import DateTime, Index, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    create_async_engine,
+    async_sessionmaker,
+)
 
+# ─── Engine and session factory (exposed for DatabaseManager) ─────────────────
+
+engine = create_async_engine(
+    "sqlite+aiosqlite:///data/uptocelo.db",
+    echo=False,  # set to True only for debug
+)
+
+AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+# ─── Declarative base ─────────────────────────────────────────────────────────
 
 class Base(DeclarativeBase):
     pass
 
+
+# ─── Apps available (23 apps across 7 categories) ─────────────────────────────
+# If a 24th app is added to the roadmap, update this dict and re-run init_db.
+
+APPS_AVAILABLE: dict[str, list[str]] = {
+    "payments": ["minipay", "valora", "halofi", "hurupay"],
+    "defi": [
+        "ubeswap",
+        "moola",
+        "mento",
+        "symmetric",
+        "mobius",
+        "knox",
+        "equalizer",
+        "uniswap",
+    ],
+    "onramp": ["celocashflow", "unipos"],
+    "nfts": ["octoplace", "hypermove", "truefeedback"],
+    "refi": ["toucan", "toucanrefi"],
+    "social": ["impactmarket", "masa"],
+    "network": ["celonetwork", "celoreserve"],
+}
+
+
+# ─── Models ──────────────────────────────────────────────────────────────────
 
 class User(Base):
     """Telegram user registered with the bot."""
 
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    telegram_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    first_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    subscribed: Mapped[bool] = mapped_column(default=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    subscribed: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
     )
-    last_active_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    last_digest_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
-
-    # --- Premium subscription fields ---
     tier: Mapped[str] = mapped_column(String(16), default="free")
     # Valid values: "free" | "premium"
-
     premium_expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        DateTime(timezone=True),
+        nullable=True,
     )
-    # Set when user activates premium; cleared on expiry.
-
     wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True)
-    # Celo address provided by user for payment verification.
+    # Celo wallet address provided by the user for payment verification
 
     __table_args__ = (
+        Index("ix_users_subscribed", "subscribed"),
         Index("ix_users_tier", "tier"),
         Index("ix_users_premium_expires_at", "premium_expires_at"),
     )
-
-    def __repr__(self) -> str:
-        return (
-            f"<User telegram_id={self.telegram_id} username={self.username!r} "
-            f"tier={self.tier!r}>"
-        )
 
 
 class UserAppFilter(Base):
@@ -61,48 +102,58 @@ class UserAppFilter(Base):
     __tablename__ = "user_app_filters"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    telegram_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    app_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    enabled: Mapped[bool] = mapped_column(default=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.user_id"),
+        nullable=False,
+    )
+    app_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    def __repr__(self) -> str:
-        return f"<UserAppFilter user={self.telegram_id} app={self.app_key!r} enabled={self.enabled}>"
+    __table_args__ = (
+        Index("ix_user_app_filters_user_id", "user_id"),
+        Index("ix_user_app_filters_category", "category"),
+        UniqueConstraint("user_id", "app_name", name="uq_user_app"),
+    )
 
 
 class DigestLog(Base):
-    """Records every digest sent to a user."""
+    """Log aggregated per daily broadcast (one row per run). Replaces BroadcastLog."""
 
     __tablename__ = "digest_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    telegram_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    digest_type: Mapped[str] = mapped_column(String(32), default="daily")
-    sent_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
     )
-    tokens_used: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    model_used: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-
-    def __repr__(self) -> str:
-        return f"<DigestLog user={self.telegram_id} type={self.digest_type!r} sent_at={self.sent_at}>"
+    recipients_count: Mapped[int] = mapped_column(Integer, default=0)
+    groq_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    items_fetched: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class FetcherLog(Base):
-    """Records fetcher run results for health monitoring."""
+    """Log per execution of each individual fetcher."""
 
     __tablename__ = "fetcher_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    fetcher_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    ran_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Values: "rss" | "twitter" | "market" | "onchain"
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
     )
-    items_fetched: Mapped[int] = mapped_column(Integer, default=0)
-    success: Mapped[bool] = mapped_column(default=True)
-    error_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    items_count: Mapped[int] = mapped_column(Integer, default=0)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_msg: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
-    def __repr__(self) -> str:
-        return (
-            f"<FetcherLog fetcher={self.fetcher_name!r} "
-            f"success={self.success} items={self.items_fetched}>"
-        )
+
+# ─── Schema initialization ───────────────────────────────────────────────────
+
+async def init_db() -> None:
+    """Create all tables if they do not exist. Safe to call on every startup."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)

@@ -15,7 +15,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from src.bot.handlers import HELP_MESSAGE, PREMIUM_MESSAGE
 from src.bot.keyboards import (
-    APPS_BY_CATEGORY,
+    get_details_keyboard,
     get_digest_keyboard,
     get_main_keyboard,
     get_premium_keyboard,
@@ -41,7 +41,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id: int = update.effective_user.id
 
     if data == "noop":
-        return
+        return  # silently ignore category header buttons
     elif data == "digest:latest":
         await _handle_digest_latest(query, context, user_id)
     elif data.startswith("details:"):
@@ -55,17 +55,18 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _handle_ask(query, context, user_id, digest_id)
     elif data == "settings:open":
         await _handle_settings_open(query, context, user_id)
-    elif data == "settings:close":
+    elif data == "settings_close":
         await _handle_settings_close(query)
     elif data.startswith("toggle_app:"):
-        _, app_name = data.split(":", 1)
-        await _handle_toggle_app(query, context, user_id, app_name)
+        await _handle_toggle_app(query, user_id)
     elif data == "premium:open":
         await _handle_premium_open(query, context, user_id)
     elif data in ("premium:7d", "premium:30d"):
         await _handle_premium_info(query, data)
     elif data == "premium:confirm":
         await _handle_premium_confirm(query)
+    elif data.startswith("back:"):
+        await _handle_back(query, user_id)
     elif data == "help:open":
         await _handle_help_open(query)
     else:
@@ -85,40 +86,30 @@ async def _handle_digest_latest(
 
 
 async def _handle_details(query, context: ContextTypes.DEFAULT_TYPE, digest_id: str) -> None:
-    """Show full digest text from cache file."""
+    """Expand the digest message to full view with the details keyboard."""
     cache_file = DIGEST_CACHE_DIR / f"digest_{digest_id}.json"
     if not cache_file.exists():
-        await query.answer(
-            "⚠️ Digest not found. It may have expired.",
-            show_alert=True,
-        )
+        await query.answer("⚠️ Digest not found. It may have expired.", show_alert=True)
         return
     try:
-        raw = cache_file.read_text(encoding="utf-8")
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("[CALLBACK] Failed to read digest cache %s: %s", digest_id, e)
-        await query.answer(
-            "⚠️ Digest not found. It may have expired.",
-            show_alert=True,
-        )
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.error("[DETAILS] Failed to load digest %s | error: %s", digest_id, exc)
+        await query.answer("❌ Failed to load digest.", show_alert=True)
         return
     text = payload.get("text", "")
     if not text:
-        await query.answer(
-            "⚠️ Digest not found. It may have expired.",
-            show_alert=True,
-        )
+        await query.answer("⚠️ Digest content is empty.", show_alert=True)
         return
-    title = f"📰 *Full Digest — {digest_id}*\n\n"
     try:
-        await query.message.reply_text(
-            title + text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_digest_keyboard(digest_id),
+        await query.edit_message_text(
+            text=text,
+            reply_markup=get_details_keyboard(digest_id),
+            parse_mode=ParseMode.HTML,
         )
     except BadRequest:
         pass
+    logger.info("[DETAILS] Digest %s loaded for user in details view", digest_id)
 
 
 async def _handle_links(query, context: ContextTypes.DEFAULT_TYPE, digest_id: str) -> None:
@@ -152,6 +143,30 @@ async def _handle_links(query, context: ContextTypes.DEFAULT_TYPE, digest_id: st
     )
 
 
+async def _handle_back(query, user_id: int) -> None:
+    """Return to digest original view with the standard digest keyboard."""
+    digest_id = query.data.split(":", 1)[1]
+    cache_file = DIGEST_CACHE_DIR / f"digest_{digest_id}.json"
+    try:
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
+        text = payload.get("text", "")
+    except Exception:
+        await query.answer("❌ Could not reload digest.", show_alert=True)
+        return
+    if not text:
+        await query.answer("❌ Could not reload digest.", show_alert=True)
+        return
+    try:
+        await query.edit_message_text(
+            text=text,
+            reply_markup=get_digest_keyboard(digest_id),
+            parse_mode=ParseMode.HTML,
+        )
+    except BadRequest:
+        pass
+    logger.info("[DETAILS] Back to digest view | digest=%s | user=%d", digest_id, user_id)
+
+
 async def _handle_ask(
     query, context: ContextTypes.DEFAULT_TYPE, user_id: int, digest_id: str
 ) -> None:
@@ -173,18 +188,13 @@ async def _handle_ask(
 async def _handle_settings_open(
     query, context: ContextTypes.DEFAULT_TYPE, user_id: int
 ) -> None:
-    """Open settings menu with app toggles from DB."""
-    user_apps_list = await db.get_user_apps(user_id)
-    all_apps = [app for apps in APPS_BY_CATEGORY.values() for app in apps]
-    user_apps = {app: (app in user_apps_list) for app in all_apps}
-    text = (
-        "⚙️ *Select Your Apps*\n\n"
-        "Tap to toggle apps. Changes are saved automatically."
-    )
+    """Open settings menu with app toggles reflecting live DB state."""
+    user_apps = await db.get_user_apps_by_category(user_id)
+    text = "⚙️ <b>Up-to-Celo — Select Your Apps</b>\n\nTap an app to toggle it on/off."
     try:
         await query.message.edit_text(
             text,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=get_settings_keyboard(user_apps),
         )
     except BadRequest:
@@ -192,40 +202,44 @@ async def _handle_settings_open(
 
 
 async def _handle_settings_close(query) -> None:
-    """Close settings and show main keyboard."""
+    """Close settings and show save confirmation."""
     try:
-        await query.message.edit_text(
-            "✅ *Settings saved.*\n\nYour app preferences have been updated.",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_main_keyboard(),
+        await query.edit_message_text(
+            text="✅ <b>Settings saved.</b>\nYour digest will reflect your app selection.",
+            parse_mode=ParseMode.HTML,
         )
     except BadRequest:
         pass
 
 
-async def _handle_toggle_app(
-    query, context: ContextTypes.DEFAULT_TYPE, user_id: int, app_name: str
-) -> None:
-    """Toggle one app and refresh settings keyboard from DB."""
-    user_apps_list = await db.get_user_apps(user_id)
-    currently_enabled = app_name in user_apps_list
-    if currently_enabled:
-        count = await db.count_enabled_apps(user_id)
-        if count <= 1:
-            await query.answer("⚠️ Select at least one app.", show_alert=True)
-            return
-    await db.update_user_app(user_id, app_name, not currently_enabled)
-    user_apps_list = await db.get_user_apps(user_id)
-    all_apps = [app for apps in APPS_BY_CATEGORY.values() for app in apps]
-    user_apps = {app: (app in user_apps_list) for app in all_apps}
+async def _handle_toggle_app(query, user_id: int) -> None:
+    """Toggle one app and refresh the settings keyboard with updated DB state.
+
+    app_name is read directly from query.data as lowercase — no display-name conversion needed.
+    """
+    app_name: str = query.data.split(":", 1)[1]
+
+    user_apps = await db.get_user_apps_by_category(user_id)
+    enabled_apps = [a for apps in user_apps.values() for a in apps]
+    currently_enabled = app_name in enabled_apps
+
+    # Guard: never disable the last enabled app
+    if currently_enabled and await db.count_enabled_apps(user_id) <= 1:
+        await query.answer("⚠️ Select at least one app.", show_alert=True)
+        return
+
+    await db.update_user_app(user_id, app_name, enabled=not currently_enabled)
+
+    updated_apps = await db.get_user_apps_by_category(user_id)
     try:
-        await query.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(user_apps),
+        await query.edit_message_reply_markup(
+            reply_markup=get_settings_keyboard(updated_apps),
         )
     except BadRequest:
         pass
+
     logger.info(
-        "[SETTINGS] user=%d toggle app=%s enabled=%s",
+        "[SETTINGS] user=%d | toggle app=%s | enabled=%s",
         user_id,
         app_name,
         not currently_enabled,

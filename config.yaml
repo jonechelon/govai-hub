@@ -9,7 +9,7 @@ bot:
   admin_chat_id: ${ADMIN_CHAT_ID}
 
 digest_schedule:
-  timezone: "America/Fortaleza"
+  timezone: "Europe/Madrid"
   time: "08:30"
   template: "daily"
   misfire_grace_time: 120

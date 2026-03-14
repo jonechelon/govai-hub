@@ -18,6 +18,8 @@ class RateLimiter:
     def check_digest(self, user_id: int) -> bool:
         """Check whether a user can trigger /digest now.
 
+        Does NOT stamp the timestamp — call register_digest() after successful delivery.
+
         Args:
             user_id: Telegram numeric user ID.
 
@@ -36,8 +38,19 @@ class RateLimiter:
             )
             return False
 
-        self._digest_state[user_id] = now
         return True
+
+    def register_digest(self, user_id: int) -> None:
+        """Store delivery timestamp to enforce the 60-min sliding window.
+
+        Must be called only after the digest has been successfully delivered.
+        Separating check from registration ensures the cooldown is not activated
+        when delivery fails (e.g. Groq unavailable, Telegram API error).
+
+        Args:
+            user_id: Telegram numeric user ID.
+        """
+        self._digest_state[user_id] = time.time()
 
     def check_ask(self, user_id: int, is_premium: bool) -> bool:
         """Check whether a user can trigger /ask now.
@@ -75,9 +88,25 @@ class RateLimiter:
             )
             return False
 
-        state["count"] += 1
-        self._ask_state[user_id] = state
         return True
+
+    def register_ask(self, user_id: int) -> None:
+        """Record an ask event to track daily quota.
+
+        Must be called only after the ask has been successfully answered.
+        Keeps rate limit consistent with register_digest (no quota consumed on failure).
+
+        Args:
+            user_id: Telegram numeric user ID.
+        """
+        now = time.time()
+        state = self._ask_state.get(
+            user_id, {"count": 0, "window_start": now}
+        )
+        if now - state["window_start"] >= ASK_WINDOW_SECONDS:
+            state = {"count": 0, "window_start": now}
+        state["count"] = state["count"] + 1
+        self._ask_state[user_id] = state
 
     def get_remaining(self, user_id: int, action: str) -> int:
         """Return how many requests a user still has available for an action.
@@ -131,139 +160,3 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter()
-# src/utils/rate_limiter.py
-# Up-to-Celo — in-memory sliding-window rate limiter
-
-from __future__ import annotations
-
-import logging
-import time
-from collections import defaultdict, deque
-from typing import Deque
-
-logger = logging.getLogger(__name__)
-
-# Free tier: max 3 /ask queries per day (86 400 seconds)
-_ASK_FREE_MAX: int = 3
-_ASK_FREE_WINDOW_SECONDS: int = 86_400  # 24 hours
-
-# Digest manual cooldown: 1 request per hour
-_DIGEST_COOLDOWN_SECONDS: int = 3_600  # 60 minutes
-
-
-class RateLimiter:
-    """In-memory sliding-window rate limiter for bot commands.
-
-    Thread-safe via the GIL for single-process deployments.
-    State is lost on restart (acceptable for rate limiting purposes).
-    """
-
-    _instance: RateLimiter | None = None
-
-    def __new__(cls) -> RateLimiter:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self) -> None:
-        if self._initialized:
-            return
-        # ask: {user_id: deque of timestamps}
-        self._ask_log: dict[int, Deque[float]] = defaultdict(deque)
-        # digest: {user_id: last request timestamp}
-        self._digest_log: dict[int, float] = {}
-        self._initialized = True
-
-    # ── /ask rate limit ────────────────────────────────────────────────────────
-
-    async def check_ask(self, user_id: int, is_premium: bool) -> bool:
-        """Check whether a user is allowed to run /ask.
-
-        Free users are limited to 3 queries per 24 hours.
-        Premium users have unlimited access (fair use — no hard cap).
-
-        Args:
-            user_id: Telegram numeric user ID.
-            is_premium: True if the user currently has an active premium subscription.
-
-        Returns:
-            True if the request is allowed, False if rate-limited.
-        """
-        if is_premium:
-            return True
-
-        now = time.monotonic()
-        window_start = now - _ASK_FREE_WINDOW_SECONDS
-        history = self._ask_log[user_id]
-
-        # Evict entries outside the window
-        while history and history[0] < window_start:
-            history.popleft()
-
-        if len(history) >= _ASK_FREE_MAX:
-            logger.info("[RATELIMIT] user %d hit ask limit | tier: free", user_id)
-            return False
-
-        history.append(now)
-        return True
-
-    def ask_remaining(self, user_id: int) -> int:
-        """Return how many /ask queries the user has left in the current window.
-
-        Args:
-            user_id: Telegram numeric user ID.
-
-        Returns:
-            Remaining queries (0 if rate-limited, _ASK_FREE_MAX for new users).
-        """
-        now = time.monotonic()
-        window_start = now - _ASK_FREE_WINDOW_SECONDS
-        history = self._ask_log[user_id]
-        while history and history[0] < window_start:
-            history.popleft()
-        return max(0, _ASK_FREE_MAX - len(history))
-
-    # ── /digest manual cooldown ────────────────────────────────────────────────
-
-    async def check_digest(self, user_id: int) -> bool:
-        """Check whether a user may request a manual digest.
-
-        Cooldown is 1 hour per user regardless of tier.
-
-        Args:
-            user_id: Telegram numeric user ID.
-
-        Returns:
-            True if allowed, False if still in cooldown.
-        """
-        now = time.monotonic()
-        last = self._digest_log.get(user_id)
-
-        if last is not None and (now - last) < _DIGEST_COOLDOWN_SECONDS:
-            remaining = int(_DIGEST_COOLDOWN_SECONDS - (now - last))
-            logger.info(
-                "[RATELIMIT] user %d hit digest cooldown | %ds remaining",
-                user_id,
-                remaining,
-            )
-            return False
-
-        self._digest_log[user_id] = now
-        return True
-
-    def digest_cooldown_remaining(self, user_id: int) -> int:
-        """Return seconds remaining in the digest cooldown for a user.
-
-        Args:
-            user_id: Telegram numeric user ID.
-
-        Returns:
-            Seconds until the user can request another digest (0 if no cooldown).
-        """
-        now = time.monotonic()
-        last = self._digest_log.get(user_id)
-        if last is None:
-            return 0
-        remaining = _DIGEST_COOLDOWN_SECONDS - (now - last)
-        return max(0, int(remaining))
