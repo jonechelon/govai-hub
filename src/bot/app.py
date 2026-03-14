@@ -1,181 +1,148 @@
 # src/bot/app.py
-# Up-to-Celo — bot application factory and main entrypoint
+# Up-to-Celo — bot application factory and main entrypoint (P5)
 
 from __future__ import annotations
 
 import logging
+import signal
 import sys
 
-from telegram import Bot
-from telegram.error import InvalidToken, NetworkError
+from telegram import Update
 from telegram.ext import Application, ApplicationBuilder
 
-from src.utils.env_validator import AppConfig, get_env_or_fail
+from src.bot.callbacks import callback_query_handler
+from src.bot.handlers import (
+    ask_handler,
+    confirm_payment_handler,
+    digest_handler,
+    help_handler,
+    premium_handler,
+    settings_handler,
+    start_handler,
+    status_handler,
+    subscribe_handler,
+    unsubscribe_handler,
+)
+from src.database.manager import DatabaseManager
+from src.scheduler.scheduler import scheduler
+from src.utils.config_loader import CONFIG
+from src.utils.env_validator import get_env_or_fail
+from src.utils.logger import setup_logger
 
 logger = logging.getLogger(__name__)
 
+# Singleton DB instance for lifecycle hooks
+db = DatabaseManager()
 
-def _configure_logging() -> None:
-    """Configure root logger for startup (console only, INFO level).
-    Full logging setup with file rotation will be added in P40.
+
+async def on_startup(application: Application) -> None:
+    """Run once after the Application is initialized.
+
+    Order: init_db (tables ready) → scheduler.start() → downgrade_expired_users().
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] [%(levelname)s] %(name)s — %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    await db.init_db()
+    scheduler.start()
+    await db.downgrade_expired_users()
+    logger.info("[STARTUP] DB initialized, scheduler started, expired users downgraded")
 
 
-def _mask_token(token: str) -> str:
-    """Return token with all but last 6 characters masked."""
-    return f"***{token[-6:]}"
+async def on_shutdown(application: Application) -> None:
+    """Run once after the Application has stopped."""
+    scheduler.shutdown()
+    logger.info("[SHUTDOWN] Up-to-Celo bot shutting down")
 
 
-def create_application(config: AppConfig) -> Application:
+def build_application() -> Application:
     """Build and configure the Telegram Application instance.
 
-    Registers command and callback handlers.
-    Configures post_init for DB and scheduler initialization.
-
-    Args:
-        config: validated AppConfig from get_env_or_fail().
+    Uses ApplicationBuilder with post_init / post_shutdown hooks.
+    Registers all command and callback handlers. No business logic — wiring only.
 
     Returns:
         Configured Application instance (not yet running).
     """
     application = (
         ApplicationBuilder()
-        .token(config.telegram_bot_token)
+        .token(get_env_or_fail("TELEGRAM_BOT_TOKEN"))
+        .post_init(on_startup)
+        .post_shutdown(on_shutdown)
         .build()
     )
 
-    # --- register handlers ---
-    # Handlers are stubs until P5–P9 are implemented.
-    _register_handlers(application)
+    # Command handlers (instances from src.bot.handlers)
+    application.add_handler(start_handler)
+    application.add_handler(help_handler)
+    application.add_handler(status_handler)
+    application.add_handler(premium_handler)
+    application.add_handler(confirm_payment_handler)
+    application.add_handler(digest_handler)
+    application.add_handler(settings_handler)
+    application.add_handler(subscribe_handler)
+    application.add_handler(unsubscribe_handler)
+    application.add_handler(ask_handler)
 
-    # --- post_init: runs after application.initialize() ---
-    # DB init (P23) and scheduler start (P20) will be wired here.
-    async def post_init(app: Application) -> None:
-        await _on_startup(app, config)
-
-    application.post_init = post_init
-
-    # --- post_shutdown: runs after application stops ---
-    async def post_shutdown(app: Application) -> None:
-        await _on_shutdown(app)
-
-    application.post_shutdown = post_shutdown
+    # Callback query router (inline keyboards)
+    application.add_handler(callback_query_handler)
 
     return application
 
 
-def _register_handlers(application: Application) -> None:
-    """Register all command and callback handlers.
-
-    Stubs — full implementation in P5–P9.
-    Each handler will be imported from src/bot/handlers.py and
-    src/bot/callbacks.py when those modules are created.
-    """
-    # Placeholder: no handlers registered yet.
-    # P5  → /start, /help
-    # P6  → /help (set_my_commands)
-    # P7  → /subscribe, /unsubscribe
-    # P9  → CallbackQueryHandler (digest inline buttons)
-    # P10 → error handler
-    logger.debug("Handler registration: stubs in place — awaiting P5–P9.")
-
-
-async def _on_startup(application: Application, config: AppConfig) -> None:
-    """Run once after the Application is initialized.
-
-    Wires: DB init (P23), scheduler start (P20), admin notification.
-    """
-    bot: Bot = application.bot
-
-    # Validate token with a live API call
-    bot_info = await bot.get_me()
-
-    logger.info(
-        "[STARTUP] Up-to-Celo Bot started | "
-        "username: @%s | id: %d | token: %s",
-        bot_info.username,
-        bot_info.id,
-        _mask_token(config.telegram_bot_token),
-    )
-
-    # DB init stub — will call DatabaseManager.init_db() in P23
-    logger.info("[STARTUP] Database: stub — awaiting P23.")
-
-    # Scheduler stub — will call DigestScheduler.start() in P20
-    logger.info("[STARTUP] Scheduler: stub — awaiting P20.")
-
-    # Notify admin
-    try:
-        await bot.send_message(
-            chat_id=config.admin_chat_id,
-            text=(
-                "🟡 *Up\\-to\\-Celo started*\n"
-                f"Bot: @{bot_info.username}\n"
-                f"Token: `{_mask_token(config.telegram_bot_token)}`"
-            ),
-            parse_mode="MarkdownV2",
-        )
-    except Exception as exc:
-        logger.warning("[STARTUP] Could not notify admin: %s", exc)
-
-
-async def _on_shutdown(application: Application) -> None:
-    """Run once after the Application has stopped.
-
-    Wires: scheduler shutdown (P20), DB flush (P23), log flush.
-    """
-    logger.info("[SHUTDOWN] Scheduler: stub — awaiting P20.")
-    logger.info("[SHUTDOWN] Database: stub — awaiting P23.")
-    logger.info("[SHUTDOWN] Up-to-Celo Bot stopped gracefully.")
-
-
 def main() -> None:
-    """Main entrypoint: load config, build app, run polling.
+    """Main entrypoint: validate environment, build application, and start polling."""
+    # Step 1: initialize logging before anything else
+    setup_logger()
 
-    run_polling() in PTB v21+ manages its own event loop internally.
-    It must NOT be called inside asyncio.run() or any running coroutine.
-    """
-    _configure_logging()
+    # Step 2: validate all required environment variables
+    # Fails fast with descriptive error if any var is missing
+    get_env_or_fail("TELEGRAM_BOT_TOKEN")
+    get_env_or_fail("GROQ_API_KEY")
+    get_env_or_fail("ADMIN_CHAT_ID")
+    get_env_or_fail("CELO_RPC_URL")
+    get_env_or_fail("BOT_WALLET_ADDRESS")
+    get_env_or_fail("BOT_WALLET_PRIVATE_KEY")
 
-    try:
-        config = get_env_or_fail()
-    except EnvironmentError as exc:
-        logger.critical("[STARTUP] Environment error: %s", exc)
-        sys.exit(1)
-
-    try:
-        application = create_application(config)
-    except InvalidToken:
-        logger.critical(
-            "[STARTUP] InvalidToken — check TELEGRAM_BOT_TOKEN in .env "
-            "(get it from @BotFather on Telegram)."
-        )
-        sys.exit(1)
-    except NetworkError as exc:
-        logger.critical(
-            "[STARTUP] NetworkError during application build: %s — "
-            "check your internet connection.", exc
-        )
-        sys.exit(1)
-
-    logger.info("[STARTUP] Starting polling...")
-
-    # run_polling() creates and manages the event loop itself in PTB v21+.
-    # Calling it inside asyncio.run() causes "event loop already running".
-    application.run_polling(
-        allowed_updates=["message", "callback_query"],
-        drop_pending_updates=True,
+    # Step 3: confirm config loaded successfully
+    bot_name = CONFIG.get("bot", {}).get("name", "Up-to-Celo")
+    digest_time = CONFIG.get("digest_schedule", {}).get("time", "08:30")
+    digest_tz = CONFIG.get("digest_schedule", {}).get("timezone", "America/Fortaleza")
+    logger.info(
+        f"[CONFIG] Loaded | bot={bot_name} | digest={digest_time} {digest_tz}"
     )
+
+    # Step 4: handle SIGTERM gracefully (Render sends SIGTERM on worker stop)
+    def _handle_sigterm(signum, frame) -> None:
+        logger.info("[SHUTDOWN] SIGTERM received — stopping bot")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
+    # Step 5 + 6: build app and log startup
+    try:
+        application = build_application()
+        logger.info(
+            "[STARTUP] Up-to-Celo bot started | version: 1.1 | webhook: polling"
+        )
+
+        # Step 7: start polling — blocks until stopped
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
+
+        # Step 8: clean exit after run_polling returns (e.g. KeyboardInterrupt handled internally)
+        logger.info("[SHUTDOWN] Polling stopped — exiting cleanly")
+        sys.exit(0)
+
+    except KeyboardInterrupt:
+        # Ctrl+C during local development
+        logger.info("[SHUTDOWN] KeyboardInterrupt — exiting cleanly")
+        sys.exit(0)
+
+    except Exception as exc:
+        # Step 9: any fatal error during startup or polling
+        logger.exception(f"[FATAL] Unhandled exception: {exc}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        logger.info("[SHUTDOWN] KeyboardInterrupt received — exiting.")
-        sys.exit(0)
+    main()

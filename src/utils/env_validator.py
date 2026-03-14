@@ -1,88 +1,45 @@
 # src/utils/env_validator.py
-# Up-to-Celo — environment variable loader and validator
+# Up-to-Celo — environment variable validator
 
 from __future__ import annotations
 
+import logging
 import os
-from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+load_dotenv()  # load .env into os.environ at import time
 
-@dataclass
-class AppConfig:
-    telegram_bot_token: str
-    groq_api_key: str
-    admin_chat_id: int
-    celo_rpc_url: str
-    nitter_instance: str
-    coingecko_api_key: str
+logger = logging.getLogger(__name__)
 
-
-def get_env_or_fail() -> AppConfig:
-    """Load and validate all environment variables.
-
-    Returns:
-        AppConfig: validated configuration object.
-
-    Raises:
-        EnvironmentError: if any required variable is missing or empty.
-    """
-    load_dotenv()
-
-    # --- required variables ---
-    telegram_bot_token = _require(
-        "TELEGRAM_BOT_TOKEN",
-        "Create a bot via @BotFather on Telegram and copy the token.",
-    )
-    groq_api_key = _require(
-        "GROQ_API_KEY",
-        "Get your API key at https://console.groq.com/keys",
-    )
-    admin_chat_id_raw = _require(
-        "ADMIN_CHAT_ID",
-        "Send a message to @userinfobot on Telegram to find your numeric chat ID.",
-    )
-
-    # ADMIN_CHAT_ID must be a valid integer
-    try:
-        admin_chat_id = int(admin_chat_id_raw)
-    except ValueError:
-        raise EnvironmentError(
-            f"ADMIN_CHAT_ID must be a numeric Telegram chat ID, got: '{admin_chat_id_raw}'. "
-            "Send a message to @userinfobot on Telegram to find your numeric chat ID."
-        )
-
-    # --- optional variables ---
-    celo_rpc_url = os.getenv("CELO_RPC_URL", "").strip() or "https://forno.celo.org"
-    nitter_instance = os.getenv("NITTER_INSTANCE", "").strip() or "https://nitter.net"
-    coingecko_api_key = os.getenv("COINGECKO_API_KEY", "").strip()
-
-    return AppConfig(
-        telegram_bot_token=telegram_bot_token,
-        groq_api_key=groq_api_key,
-        admin_chat_id=admin_chat_id,
-        celo_rpc_url=celo_rpc_url,
-        nitter_instance=nitter_instance,
-        coingecko_api_key=coingecko_api_key,
-    )
+# Human-readable hints shown when a required variable is missing
+_VAR_HINTS: dict[str, str] = {
+    "TELEGRAM_BOT_TOKEN":     "Create a bot via @BotFather on Telegram and copy the token",
+    "GROQ_API_KEY":           "Get it from https://console.groq.com/keys",
+    "ADMIN_CHAT_ID":          "Send a message to @userinfobot on Telegram to find your numeric chat ID",
+    "CELO_RPC_URL":           "Default: https://forno.celo.org (or https://rpc.ankr.com/celo)",
+    "BOT_WALLET_ADDRESS":     'Generate with: python -c "from web3 import Web3; a=Web3().eth.account.create(); print(a.address)"',
+    "BOT_WALLET_PRIVATE_KEY": "Generated alongside BOT_WALLET_ADDRESS — NEVER commit to Git",
+}
 
 
-def _require(var: str, instructions: str) -> str:
-    """Return the value of a required env variable or raise EnvironmentError.
+def get_env_or_fail(key: str) -> str:
+    """Return the value of a required environment variable.
 
     Args:
-        var: environment variable name.
-        instructions: human-readable instructions for obtaining the value.
+        key: Name of the environment variable to load.
+
+    Returns:
+        The variable's value as a non-empty string.
 
     Raises:
-        EnvironmentError: if the variable is missing or empty.
+        ValueError: if the variable is missing or empty, with a descriptive hint.
     """
-    value = os.getenv(var, "").strip()
+    value = os.environ.get(key, "").strip()
     if not value:
-        raise EnvironmentError(
-            f"Missing required environment variable: {var}\n"
-            f"  → {instructions}\n"
-            f"  → Add it to your .env file: {var}=your_value_here"
+        hint = _VAR_HINTS.get(key, f"Set {key} in your .env file")
+        raise ValueError(
+            f"Missing required environment variable: {key}\n"
+            f"  → {hint}"
         )
     return value

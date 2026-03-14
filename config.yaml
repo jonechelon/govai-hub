@@ -17,81 +17,69 @@ digest_schedule:
 rss_feeds:
   - url: "https://blog.celo.org/feed"
     source: "Celo Blog"
-    source_app: "celo_network"
+    source_app: "CeloNetwork"
     category: "network"
+
   - url: "https://forum.celo.org/latest.rss"
     source: "Celo Forum"
-    source_app: "celo_network"
+    source_app: "CeloNetwork"
     category: "network"
+
   - url: "https://github.com/celo-org/celo-monorepo/releases.atom"
-    source: "Celo Monorepo"
-    source_app: "celo_network"
+    source: "GitHub celo-monorepo"
+    source_app: "CeloNetwork"
     category: "network"
-  - url: "https://github.com/celo-org/celo-proposals/releases.atom"
-    source: "Celo Governance"
-    source_app: "celo_reserve"
+
+  - url: "https://github.com/celo-org/celo-blockchain/releases.atom"
+    source: "GitHub celo-blockchain"
+    source_app: "CeloNetwork"
     category: "network"
-  - url: "https://github.com/celo-org/valora-wallet/releases.atom"
-    source: "Valora"
-    source_app: "valora"
-    category: "payments"
-  - url: "https://github.com/celo-org/minipay-template/releases.atom"
-    source: "MiniPay"
-    source_app: "minipay"
-    category: "payments"
+
   - url: "https://github.com/mento-protocol/mento-core/releases.atom"
-    source: "Mento"
-    source_app: "mento"
+    source: "GitHub Mento"
+    source_app: "Mento"
     category: "defi"
+
   - url: "https://github.com/Ubeswap/ubeswap/releases.atom"
-    source: "Ubeswap"
-    source_app: "ubeswap"
+    source: "GitHub Ubeswap"
+    source_app: "Ubeswap"
     category: "defi"
-  - url: "https://blog.toucan.earth/rss/"
-    source: "Toucan Blog"
-    source_app: "toucan"
-    category: "refi"
-  - url: "https://github.com/impactmarket/app/releases.atom"
-    source: "ImpactMarket"
-    source_app: "impactmarket"
-    category: "social"
 
 twitter_accounts:
-  - account: "CeloOrg"
-    source_app: "celo_network"
+  - handle: "CeloOrg"
+    source_app: "CeloNetwork"
     category: "network"
-  - account: "CeloDevs"
-    source_app: "celo_network"
-    category: "network"
-  - account: "CeloPG"
-    source_app: "celo_reserve"
-    category: "network"
-  - account: "MiniPay"
-    source_app: "minipay"
+
+  - handle: "MiniPay_"
+    source_app: "MiniPay"
     category: "payments"
-  - account: "valoraapp"
-    source_app: "valora"
+
+  - handle: "valoraapp"
+    source_app: "Valora"
     category: "payments"
-  - account: "ubeswap"
-    source_app: "ubeswap"
+
+  - handle: "Ubeswap"
+    source_app: "Ubeswap"
     category: "defi"
-  - account: "mento_labs"
-    source_app: "mento"
+
+  - handle: "MentoProtocol"
+    source_app: "Mento"
     category: "defi"
-  - account: "ImpactMarket"
-    source_app: "impactmarket"
+
+  - handle: "ImpactMarket"
+    source_app: "ImpactMarket"
     category: "social"
-  - account: "MasaFinance"
-    source_app: "masa"
-    category: "social"
-  - account: "ToucanProtocol"
-    source_app: "toucan"
+
+  - handle: "toucanprotocol"
+    source_app: "Toucan"
     category: "refi"
 
 nitter_instances:
-  - "https://nitter.net"
-  - "https://nitter.privacydev.net"
-  - "https://nitter.poast.org"
+  - "https://xcancel.com"               # primary — whitelist-gated as of 2026-03
+  - "https://nitter.poast.org"          # 403 as of 2026-03
+  - "https://nitter.cz"                 # 403 as of 2026-03
+  - "https://nitter.net"                # 404 as of 2026-03
+  - "https://nitter.privacydev.net"     # down as of 2026-03
 
 celo_rpc:
   primary: "https://forno.celo.org"
@@ -99,9 +87,9 @@ celo_rpc:
   timeout_seconds: 10
 
 celo_contracts:
-  cUSD:  "0x765DE816845861e75A25fCA122bb6898B8B1282a"
-  cEUR:  "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73"
-  cREAL: "0xe8537a3d056DA446677B9E9d6c5dB704EaAb4787"
+  cusd:  "0x765DE816845861e75A25fCA122bb6898B8B1282a"
+  ceur:  "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73"
+  creal: "0xe8537a3d056DA446677B9E9d6c5dB704EaAb4787"
 
 coingecko:
   celo_id: "celo"
@@ -197,3 +185,18 @@ health_check:
 database:
   path: "data/uptocelo.db"
   url: "sqlite+aiosqlite:///data/uptocelo.db"
+
+payment:
+  cusd_contract: "0x765DE816845861e75A25fCA122bb6898B8B1282a"
+  min_cusd_weekly: 0.49      # minimum for 7-day premium (margin for gas fees)
+  min_cusd_monthly: 1.49     # minimum for 30-day premium
+  days_weekly: 7
+  days_monthly: 30
+
+erc8004:
+  # ⚠️ Confirm address on celoscan.io before running register_agent.py
+  identity_registry: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+  agent_name: "Up-to-Celo"
+  agent_description: "AI-powered Telegram bot delivering daily Celo blockchain digests. Monitors MiniPay, Valora, Ubeswap, Mento, ImpactMarket and more. Premium subscriptions paid in cUSD on Celo."
+  agent_endpoint: "https://t.me/uptocelo_bot"
+  chain_id: 42220

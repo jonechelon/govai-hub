@@ -139,6 +139,58 @@ async def check_groq(config: AppConfig) -> None:
         fail("Groq /models", f"{type(exc).__name__}: {exc}")
 
 
+def check_wallet_address(config: AppConfig) -> None:
+    """Verify BOT_WALLET_ADDRESS is a valid EIP-55 checksum address."""
+    print("\n🔍 Bot Wallet Address")
+    wallet = config.bot_wallet_address
+    try:
+        if Web3.is_checksum_address(wallet):
+            ok("Bot wallet checksum", f"Valid checksum address: {wallet}")
+        else:
+            # Attempt to convert to checksum for a helpful hint
+            try:
+                checksum = Web3.to_checksum_address(wallet)
+                fail(
+                    "Bot wallet checksum",
+                    f"Address is not in EIP-55 checksum format. Use: {checksum}",
+                )
+            except Exception:
+                fail("Bot wallet checksum", f"Invalid Ethereum address: {wallet}")
+    except Exception as exc:
+        fail("Bot wallet checksum", f"{type(exc).__name__}: {exc}")
+
+
+async def check_wallet_cusd_balance(config: AppConfig) -> None:
+    """Query cUSD balance of BOT_WALLET_ADDRESS on Celo Mainnet."""
+    print("\n🔍 Bot Wallet cUSD Balance")
+    CUSD_CONTRACT = "0x765DE816845861e75A25fCA122bb6898B8B1282a"
+    ERC20_BALANCE_ABI = [
+        {
+            "constant": True,
+            "inputs": [{"name": "_owner", "type": "address"}],
+            "name": "balanceOf",
+            "outputs": [{"name": "balance", "type": "uint256"}],
+            "type": "function",
+        }
+    ]
+    try:
+        w3 = Web3(Web3.HTTPProvider(config.celo_rpc_url, request_kwargs={"timeout": 10}))
+        if not w3.is_connected():
+            fail("Wallet cUSD balance", f"Could not connect to {config.celo_rpc_url}")
+            return
+
+        checksum_wallet = Web3.to_checksum_address(config.bot_wallet_address)
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(CUSD_CONTRACT),
+            abi=ERC20_BALANCE_ABI,
+        )
+        balance_wei = contract.functions.balanceOf(checksum_wallet).call()
+        balance_cusd = balance_wei / 1e18
+        ok("Wallet cUSD balance", f"💰 Bot wallet cUSD balance: {balance_cusd:.4f} cUSD")
+    except Exception as exc:
+        fail("Wallet cUSD balance", f"{type(exc).__name__}: {exc}")
+
+
 # ── summary ────────────────────────────────────────────────────────────────────
 
 def print_summary() -> bool:
@@ -172,6 +224,10 @@ async def run_all_checks(config: AppConfig) -> bool:
         check_defillama(),
         check_groq(config),
     )
+
+    # Wallet checks (synchronous address validation + async RPC balance query)
+    check_wallet_address(config)
+    await check_wallet_cusd_balance(config)
 
     return print_summary()
 
