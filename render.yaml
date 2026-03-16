@@ -31,9 +31,9 @@ services:
       - key: BOT_WALLET_PRIVATE_KEY
         sync: false                    # NEVER commit to Git
       - key: CELO_RPC_URL
-        value: https://forno.celo.org
+        value: "https://forno.celo.org"
       - key: CELO_RPC_FALLBACK_URL
-        value: https://rpc.ankr.com/celo
+        value: "https://rpc.ankr.com/celo"
 
       # ── Database (Neon PostgreSQL) ────────────────────────────────
       - key: DATABASE_URL
@@ -62,7 +62,7 @@ services:
       # ── Nitter instances (Twitter RSS fallback) ───────────────────
       # Comma-separated list — TwitterFetcher tries each in order
       - key: NITTER_INSTANCES
-        value: "https://nitter.net,https://nitter.privacydev.net,https://nitter.poast.org"
+        value: "https://xcancel.com,https://nitter.privacydev.net,https://nitter.poast.org"
 
       # ── Rate limiting ─────────────────────────────────────────────
       - key: ASK_DAILY_LIMIT_FREE
