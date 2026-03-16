@@ -27,44 +27,26 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-def _build_database_url() -> str:
-    """
-    Normalize DATABASE_URL for SQLAlchemy + asyncpg compatibility.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-    Neon provides:  postgres://user:pass@host.neon.tech/db?sslmode=require
-    asyncpg needs:  postgresql+asyncpg://user:pass@host.neon.tech/db
-                    (SSL handled separately via connect_args — not query param)
-    """
-    url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/uptocelo.db")
+if DATABASE_URL:
+    # Production: Neon PostgreSQL via asyncpg
+    # Neon requires ?sslmode=require — already in connection string
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_size=5,
+        max_overflow=10,
+    )
+else:
+    # Development fallback: local SQLite
+    from src.utils.paths import DATA_DIR
 
-    # Fix Neon/Render's legacy postgres:// prefix
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-
-    # asyncpg does not support ?sslmode= as a query parameter — strip it
-    if "?sslmode=" in url:
-        url = url.split("?sslmode=")[0]
-
-    return url
-
-
-DATABASE_URL = _build_database_url()
-
-# Require TLS for Neon (enforced server-side); no-op for SQLite
-# asyncpg expects ssl=True or SSLContext, not the string "require"
-_is_postgres = DATABASE_URL.startswith("postgresql")
-_connect_args = {"ssl": True} if _is_postgres else {}
-
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    # Neon free tier caps at 10 total connections — keep pool conservative
-    pool_size=3,
-    max_overflow=2,
-    # Detect stale connections dropped by Neon's 5-min idle timeout
-    pool_pre_ping=True,
-    connect_args=_connect_args,
-)
+    SQLITE_PATH = DATA_DIR / "up-to-celo.db"
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{SQLITE_PATH}",
+        echo=False,
+    )
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
