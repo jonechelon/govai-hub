@@ -80,25 +80,14 @@ def admin_only(handler):
     return wrapper
 
 WELCOME_MESSAGE = (
-    "Welcome to Up-to-Celo!\n\n"
-    "Your daily AI-powered window into the Celo blockchain ecosystem.\n\n"
-    "What you can do:\n\n"
-    "📰 /digest — Get today's personalized digest\n"
-    "News, DeFi updates, ReFi, payments & live on-chain data — "
-    "all summarized by AI in one message.\n\n"
+    "Welcome to Up-to-Celo! 🌿\n\n"
+    "Stay up-to-date on the Celo blockchain with daily AI-powered digests.\n"
+    "Covering: network updates, DeFi, ReFi, governance & live on-chain data.\n\n"
+    "📰 /digest — Get today's Celo digest\n"
     "🤖 /ask — Chat with the Celo AI agent\n"
-    "Ask anything about the ecosystem. Examples:\n"
-    "  -  /ask What is MiniPay?\n"
-    "  -  /ask How is CELO performing today?\n"
-    "  -  /ask What are the latest DeFi updates?\n"
-    "Replies are conversational — just keep typing after the first answer.\n\n"
-    "⚙️ /settings — Customize your digest\n"
-    "Choose which apps and categories to follow "
-    "(Payments, DeFi, ReFi, NFTs and more).\n\n"
-    "⭐ /premium — Unlock unlimited AI queries\n"
-    "Free plan: 3 AI queries/day\n"
-    "Premium: unlimited queries + priority digest\n\n"
-    "Start now — run /digest to get today's update!"
+    "⚙️ /settings — Customize your feed\n"
+    "⭐ /premium — Upgrade with CELO\n\n"
+    "→ Start with /digest"
 )
 
 HELP_MESSAGE = (
