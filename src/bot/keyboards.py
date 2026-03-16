@@ -5,16 +5,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from src.database.models import APPS_AVAILABLE
 
 
-# Display metadata for each category key used in APPS_AVAILABLE.
+# Display metadata for each category key (must match APPS_AVAILABLE in models.py).
 CATEGORY_DISPLAY: dict[str, tuple[str, str]] = {
-    # internal_key: (emoji, display_label)
-    "payments": ("💳", "Payments & Wallets"),
-    "defi":     ("🔄", "DeFi & Swaps"),
-    "onramp":   ("🌍", "On-ramp / Off-ramp"),
-    "nfts":     ("🎨", "NFTs & Games"),
-    "refi":     ("🌱", "ReFi & Carbon"),
-    "social":   ("🧑‍🤝‍🧑", "Social & Identity"),
-    "network":  ("🧱", "Network & Infra"),
+    "payments":   ("💳", "Payments & Wallets"),
+    "defi":       ("🔄", "DeFi & Swaps"),
+    "onramp_nft": ("🌍", "On-ramp & NFTs"),
+    "refi_social": ("🌱", "ReFi, Social & Infra"),
 }
 
 # Maps lowercase app_name (DB key) to human-readable display label.
@@ -71,6 +67,18 @@ def get_digest_keyboard(digest_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([row1, row2])
 
 
+def get_links_keyboard(digest_id: str) -> InlineKeyboardMarkup:
+    """Keyboard shown on the links screen — single Back button."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "⬅️ Back to digest",
+                callback_data=f"back:{digest_id}",
+            )
+        ]
+    ])
+
+
 def get_details_keyboard(digest_id: str) -> InlineKeyboardMarkup:
     """Build the keyboard shown on the expanded (full) digest view.
 
@@ -99,58 +107,105 @@ def get_details_keyboard(digest_id: str) -> InlineKeyboardMarkup:
 def get_settings_keyboard(
     user_apps_by_category: dict[str, list[str]],
 ) -> InlineKeyboardMarkup:
-    """Build settings keyboard with app toggles grouped by category.
+    """Root settings screen — 4 category buttons with aggregate enabled state.
 
-    Args:
-        user_apps_by_category: {category: [app_name, ...]} with only enabled apps,
-            as returned by db.get_user_apps_by_category(user_id).
-
-    Returns:
-        InlineKeyboardMarkup with category headers and app toggle buttons in a 2-column grid.
+    ✅ = all apps in category enabled, ☑️ = some enabled, ☐ = none enabled.
     """
     rows: list[list[InlineKeyboardButton]] = []
+    for cat_key, (emoji, label) in CATEGORY_DISPLAY.items():
+        all_apps = APPS_AVAILABLE.get(cat_key, [])
+        enabled_apps = user_apps_by_category.get(cat_key, [])
+        enabled_set = set(enabled_apps)
 
-    for category, apps in APPS_AVAILABLE.items():
-        emoji, label = CATEGORY_DISPLAY.get(category, ("📦", category.title()))
+        if not all_apps:
+            continue
 
-        # Category header — non-interactive label row
+        if enabled_set >= set(all_apps):
+            state = "✅"
+        elif enabled_set:
+            state = "☑️"
+        else:
+            state = "☐"
+
         rows.append([
             InlineKeyboardButton(
-                text=f"{emoji} {label}",
-                callback_data="noop",
+                f"{state} {emoji} {label}",
+                callback_data=f"settings:category:{cat_key}",
             )
         ])
 
-        enabled_in_category: list[str] = user_apps_by_category.get(category, [])
+    rows.append([
+        InlineKeyboardButton("💾 Save & Close", callback_data="settings_close")
+    ])
+    return InlineKeyboardMarkup(rows)
 
-        app_buttons: list[InlineKeyboardButton] = []
-        for app_name in apps:
-            is_enabled = app_name in enabled_in_category
-            prefix = "✅" if is_enabled else "☑️"
-            display = APP_DISPLAY.get(app_name, app_name.title())
-            app_buttons.append(
+
+def get_category_keyboard(
+    cat_key: str,
+    user_apps_by_category: dict[str, list[str]],
+) -> InlineKeyboardMarkup:
+    """Category submenu — apps for the selected category in a 2-column grid."""
+    emoji, label = CATEGORY_DISPLAY.get(cat_key, ("⚙️", cat_key))
+    all_apps = APPS_AVAILABLE.get(cat_key, [])
+    enabled_set = set(user_apps_by_category.get(cat_key, []))
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for i in range(0, len(all_apps), 2):
+        row: list[InlineKeyboardButton] = []
+        for app in all_apps[i : i + 2]:
+            state = "✅" if app in enabled_set else "☑️"
+            label_app = APP_DISPLAY.get(app, app.capitalize())
+            row.append(
                 InlineKeyboardButton(
-                    text=f"{prefix} {display}",
-                    callback_data=f"toggle_app:{app_name}",
+                    f"{state} {label_app}",
+                    callback_data=f"toggle_app:{app}",
                 )
             )
-
-        # 2-column grid for app buttons within this category
-        for i in range(0, len(app_buttons), 2):
-            rows.append(app_buttons[i : i + 2])
+        rows.append(row)
 
     rows.append([
-        InlineKeyboardButton(text="💾 Save & Close", callback_data="settings_close")
+        InlineKeyboardButton("⬅️ Back", callback_data="settings:open")
     ])
-
     return InlineKeyboardMarkup(rows)
 
 
 def get_premium_keyboard() -> InlineKeyboardMarkup:
     """Build the premium purchase keyboard."""
-    rows = [
-        [InlineKeyboardButton("⭐ 7 days — 0.50 cUSD", callback_data="premium:7d")],
-        [InlineKeyboardButton("⭐ 30 days — 1.50 cUSD", callback_data="premium:30d")],
-        [InlineKeyboardButton("✅ I sent — /confirmpayment", callback_data="premium:confirm")],
-    ]
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "⭐ 7 days — 7 CELO",
+                callback_data="premium:7d",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⭐ 30 days — 20 CELO",
+                callback_data="premium:30d",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "✅ I sent — /confirmpayment",
+                callback_data="premium:confirm",
+            )
+        ],
+    ])
+
+
+def get_premium_plan_keyboard(days: int) -> InlineKeyboardMarkup:
+    """Keyboard shown after user selects a specific premium plan (7 or 30 days)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ I sent — /confirmpayment",
+                callback_data="premium:confirm",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬅️ Back to plans",
+                callback_data="premium:back",
+            )
+        ],
+    ])

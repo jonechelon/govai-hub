@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "up-to-celo"
+version = "0.1.0"
+description = "Telegram bot — daily AI digest for the Celo ecosystem"
+readme = "README.md"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+log_cli = true
+log_cli_level = "WARNING"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/bot/app.py", "scripts/*"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true

@@ -8,9 +8,9 @@ import json
 import logging
 import time
 from datetime import datetime
-from pathlib import Path
-
 import aiohttp
+
+from src.utils.paths import MARKET_CACHE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class MarketFetcher:
     """Fetches CELO market data from CoinGecko and TVL from DeFi Llama."""
 
-    CACHE_FILE = Path("data/cache/market_cache.json")
+    CACHE_FILE = MARKET_CACHE_PATH
     CACHE_TTL_MINUTES = 30
     REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
     HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Up-to-Celo/1.1)"}

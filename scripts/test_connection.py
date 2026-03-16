@@ -15,7 +15,7 @@ from telegram import Bot
 from telegram.error import InvalidToken, NetworkError, TelegramError
 from web3 import Web3
 
-from src.utils.env_validator import AppConfig, get_env_or_fail
+from src.utils.env_validator import load_env_config
 
 # ── result tracking ────────────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ def fail(service: str, detail: str) -> None:
 
 # ── individual checks ──────────────────────────────────────────────────────────
 
-async def check_telegram(config: AppConfig) -> None:
+async def check_telegram(config) -> None:
     """Call get_me() and send startup message to ADMIN_CHAT_ID."""
     print("\n🔍 Telegram Bot API")
     try:
@@ -58,7 +58,7 @@ async def check_telegram(config: AppConfig) -> None:
         fail("Telegram get_me()", f"NetworkError — {exc}")
 
 
-async def check_celo_rpc(config: AppConfig) -> None:
+async def check_celo_rpc(config) -> None:
     """Connect to Celo RPC and fetch latest block number."""
     print("\n🔍 Celo RPC")
     try:
@@ -116,7 +116,7 @@ async def check_defillama() -> None:
         fail("DeFi Llama /chains", f"{type(exc).__name__}: {exc}")
 
 
-async def check_groq(config: AppConfig) -> None:
+async def check_groq(config) -> None:
     """Verify Groq API key is accepted (list models endpoint)."""
     print("\n🔍 Groq API")
     url = "https://api.groq.com/openai/v1/models"
@@ -139,7 +139,7 @@ async def check_groq(config: AppConfig) -> None:
         fail("Groq /models", f"{type(exc).__name__}: {exc}")
 
 
-def check_wallet_address(config: AppConfig) -> None:
+def check_wallet_address(config) -> None:
     """Verify BOT_WALLET_ADDRESS is a valid EIP-55 checksum address."""
     print("\n🔍 Bot Wallet Address")
     wallet = config.bot_wallet_address
@@ -160,7 +160,7 @@ def check_wallet_address(config: AppConfig) -> None:
         fail("Bot wallet checksum", f"{type(exc).__name__}: {exc}")
 
 
-async def check_wallet_cusd_balance(config: AppConfig) -> None:
+async def check_wallet_cusd_balance(config) -> None:
     """Query cUSD balance of BOT_WALLET_ADDRESS on Celo Mainnet."""
     print("\n🔍 Bot Wallet cUSD Balance")
     CUSD_CONTRACT = "0x765DE816845861e75A25fCA122bb6898B8B1282a"
@@ -213,7 +213,7 @@ def print_summary() -> bool:
 
 # ── entrypoint ─────────────────────────────────────────────────────────────────
 
-async def run_all_checks(config: AppConfig) -> bool:
+async def run_all_checks(config) -> bool:
     """Run all connectivity checks concurrently where possible."""
     await check_telegram(config)
 
@@ -237,7 +237,7 @@ def main() -> None:
     print("=" * 60)
 
     try:
-        config = get_env_or_fail()
+        config = load_env_config()
     except EnvironmentError as exc:
         print(f"\n❌ Environment error: {exc}")
         sys.exit(1)

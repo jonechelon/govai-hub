@@ -38,17 +38,21 @@ class GroqClient:
         messages: list[dict],
         max_tokens: int,
         model: str | None = None,
-    ) -> str:
+        return_usage: bool = False,
+    ) -> str | tuple[str, dict]:
         """Call the Groq Chat Completions API with automatic model fallback.
 
         Args:
-            messages:   OpenAI-style messages list (role/content dicts).
-            max_tokens: Maximum tokens allowed in the completion.
-            model:      If provided, start the fallback chain from this model.
-                        If None, start from the first model in GROQ_MODELS.
+            messages:     OpenAI-style messages list (role/content dicts).
+            max_tokens:   Maximum tokens allowed in the completion.
+            model:       If provided, start the fallback chain from this model.
+                         If None, start from the first model in GROQ_MODELS.
+            return_usage: If True, return (text, usage_dict) instead of just text.
+                          usage_dict keys: prompt_tokens, completion_tokens, total_tokens.
 
         Returns:
-            The generated text content string (may be truncated if finish=length).
+            The generated text content string, or (text, usage_dict) if return_usage=True.
+            Text may be truncated if finish_reason=length.
 
         Raises:
             RuntimeError: If every model in the fallback chain fails.
@@ -63,7 +67,10 @@ class GroqClient:
 
         for attempt, current_model in enumerate(models_to_try):
             try:
-                return await self._call(current_model, messages, max_tokens)
+                content, usage = await self._call(current_model, messages, max_tokens)
+                if return_usage:
+                    return content, usage
+                return content
             except Exception as exc:
                 last_error = exc
                 has_next = attempt < len(models_to_try) - 1
@@ -82,7 +89,7 @@ class GroqClient:
         model: str,
         messages: list[dict],
         max_tokens: int,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """Execute a single Groq API call with timeout enforcement.
 
         asyncio.wait_for is used instead of the SDK's native timeout because
@@ -96,7 +103,9 @@ class GroqClient:
             max_tokens: Maximum tokens allowed in the completion.
 
         Returns:
-            Generated text content (empty string if the model returns None).
+            Tuple of (content, usage_dict). usage_dict has keys:
+            prompt_tokens, completion_tokens, total_tokens.
+            content is empty string if the model returns None.
 
         Raises:
             asyncio.TimeoutError: If the call exceeds TIMEOUT seconds.
@@ -119,14 +128,24 @@ class GroqClient:
         usage = response.usage
         total_tokens = usage.total_tokens if usage else 0
         prompt_tokens = usage.prompt_tokens if usage else 0
+        completion_tokens = usage.completion_tokens if usage else 0
         finish_reason = response.choices[0].finish_reason
 
         latency_ms = int((time.time() - start) * 1000)
 
+        usage_dict = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
         logger.info(
-            f"[GROQ] model={model} | tokens={total_tokens} "
-            f"(prompt={prompt_tokens}) | latency={latency_ms}ms "
-            f"| finish={finish_reason}"
+            "[GROQ] model=%s | tokens=%s (prompt=%s) | latency=%sms | finish=%s",
+            model,
+            total_tokens,
+            prompt_tokens,
+            latency_ms,
+            finish_reason,
         )
 
         if finish_reason == "length":
@@ -135,7 +154,7 @@ class GroqClient:
                 f"or reducing context. model={model} max_tokens={max_tokens}"
             )
 
-        return content
+        return content, usage_dict
 
     async def generate_with_system(
         self,

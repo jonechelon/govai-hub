@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
@@ -21,6 +22,40 @@ _VAR_HINTS: dict[str, str] = {
     "BOT_WALLET_ADDRESS":     'Generate with: python -c "from web3 import Web3; a=Web3().eth.account.create(); print(a.address)"',
     "BOT_WALLET_PRIVATE_KEY": "Generated alongside BOT_WALLET_ADDRESS — NEVER commit to Git",
 }
+
+
+@dataclass
+class Config:
+    """Holds all required environment variables for Up-to-Celo."""
+
+    telegram_bot_token: str
+    admin_chat_id: str
+    celo_rpc_url: str
+    groq_api_key: str
+    bot_wallet_address: str
+    bot_wallet_private_key: str
+
+
+def load_env_config() -> Config:
+    """Load all required environment variables into a Config object.
+
+    Returns:
+        Config instance populated from the environment.
+
+    Raises:
+        EnvironmentError: if any required variable is missing or empty.
+    """
+    try:
+        return Config(
+            telegram_bot_token=get_env_or_fail("TELEGRAM_BOT_TOKEN"),
+            admin_chat_id=get_env_or_fail("ADMIN_CHAT_ID"),
+            celo_rpc_url=get_env_or_fail("CELO_RPC_URL"),
+            groq_api_key=get_env_or_fail("GROQ_API_KEY"),
+            bot_wallet_address=get_env_or_fail("BOT_WALLET_ADDRESS"),
+            bot_wallet_private_key=get_env_or_fail("BOT_WALLET_PRIVATE_KEY"),
+        )
+    except ValueError as exc:
+        raise EnvironmentError(str(exc)) from exc
 
 
 def get_env_or_fail(key: str) -> str:

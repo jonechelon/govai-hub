@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -39,21 +40,24 @@ class DigestScheduler:
             return
 
         schedule_cfg = CONFIG.get("digest_schedule", {})
-        self._timezone: str = schedule_cfg.get("timezone", "Europe/Madrid")
+        tz_name: str = schedule_cfg.get("timezone", "Europe/Madrid")
+        self._timezone = ZoneInfo(tz_name)
+        self._timezone_name = tz_name
         self._time: str = schedule_cfg.get("time", "08:30")
         self._misfire_grace_time: int = int(schedule_cfg.get("misfire_grace_time", 120))
 
         self._scheduler = AsyncIOScheduler(timezone=self._timezone)
         self._initialized = True
 
-    async def start(self, application) -> None:
-        """Add the daily digest job and start the scheduler.
+    async def start(self, application, db) -> None:
+        """Add the daily digest and payment poller jobs, then start the scheduler.
 
         Args:
             application: The running python-telegram-bot Application instance.
-                         Passed to the job so it can access application.bot.
+            db: DatabaseManager singleton (passed to the payment poller job).
         """
         from src.scheduler.notifier import notifier  # late import avoids circular deps
+        from src.scheduler.payment_poller import run_payment_poller
 
         hour, minute = (int(part) for part in self._time.split(":"))
 
@@ -70,6 +74,18 @@ class DigestScheduler:
             kwargs={"application": application, "notifier": notifier},
         )
 
+        # Payment polling job — scans for incoming CELO transfers every 60 seconds.
+        # max_instances=1 prevents overlapping runs if a scan takes longer than 60s.
+        self._scheduler.add_job(
+            func=run_payment_poller,
+            trigger="interval",
+            seconds=60,
+            id="payment_poller",
+            replace_existing=True,
+            max_instances=1,
+            kwargs={"db": db, "bot": application.bot},
+        )
+
         if not self._scheduler.running:
             self._scheduler.start()
 
@@ -78,9 +94,10 @@ class DigestScheduler:
         logger.info(
             "[SCHEDULER] Daily digest scheduled at %s %s | next run: %s",
             self._time,
-            self._timezone,
+            self._timezone_name,
             next_run,
         )
+        logger.info("[SCHEDULER] Payment poller started | interval=60s")
 
     async def shutdown(self) -> None:
         """Remove all jobs and shut down the scheduler gracefully."""

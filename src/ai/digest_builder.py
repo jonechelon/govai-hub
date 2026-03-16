@@ -44,9 +44,9 @@ class DigestBuilder:
         self,
         snapshot: dict,
         user_apps_by_category: dict[str, list[str]] | None = None,
-    ) -> str:
+    ) -> tuple[str, list[dict]]:
         """
-        Build structured context string from fetcher snapshot and user app filters.
+        Build structured context string and sections from fetcher snapshot and user app filters.
 
         Sync-only: no I/O, processes data in memory. If user_apps_by_category is
         empty or None, all apps from APPS_AVAILABLE are considered enabled.
@@ -58,8 +58,11 @@ class DigestBuilder:
                 If {} or None, all apps are enabled.
 
         Returns:
-            Multiline context string (category sections + Market Snapshot) for
-            use as user_prompt in Groq. Never empty; at least Market Snapshot.
+            Tuple of (context_str, sections_list).
+            context_str: Multiline context string (category sections + Market Snapshot)
+                for use as user_prompt in Groq. Never empty; at least Market Snapshot.
+            sections_list: List of {"category": str, "items": [{"title", "url", "source", "source_app"}, ...]}
+                for links callback and reporting.
         """
         def _estimate_tokens(text: str) -> int:
             return int(len(text) / CHARS_PER_TOKEN)
@@ -67,24 +70,28 @@ class DigestBuilder:
         # Step 1 — Consolidate content items (RSS + Twitter)
         all_items = snapshot.get("rss", []) + snapshot.get("twitter", [])
 
-        # Step 2 — Determine enabled apps
+        # Step 2 — Determine enabled apps (always lowercase for case-insensitive matching)
         if not user_apps_by_category:
             enabled_apps: set[str] = set()
             for apps in APPS_AVAILABLE.values():
-                enabled_apps.update(apps)
+                enabled_apps.update(a.lower() for a in apps)
         else:
             enabled_apps = {
-                app
+                app.lower()
                 for apps in user_apps_by_category.values()
                 for app in apps
             }
 
         # Step 3 — Filter and group by category
+        sample_apps = list({item.get("source_app", "unknown") for item in all_items})[:10]
+        logger.debug("[DIGEST] source_app values in snapshot: %s", sample_apps)
+        logger.debug("[DIGEST] User enabled apps (lowercase): %s", sorted(enabled_apps))
+
         sections: dict[str, list[str]] = {cat: [] for cat in CATEGORY_PRIORITY}
 
         for item in all_items:
             cat = item.get("category", "")
-            app = item.get("source_app", "")
+            app = item.get("source_app", "").lower()
             if cat not in sections:
                 continue
             if app not in enabled_apps:
@@ -143,7 +150,57 @@ class DigestBuilder:
                 "market-only context"
             )
 
-        return context
+        sections_list = self.build_sections(snapshot, user_apps_by_category)
+        return context, sections_list
+
+    def build_sections(
+        self,
+        snapshot: dict,
+        user_apps_by_category: dict[str, list[str]] | None = None,
+    ) -> list[dict]:
+        """
+        Build structured sections (category + items with title, url, source) for cache.
+        Same filtering as build_context; used so links callback can extract URLs.
+
+        Returns:
+            List of {"category": str, "items": [{"title", "url", "source", "source_app"}, ...]}.
+        """
+        all_items = snapshot.get("rss", []) + snapshot.get("twitter", [])
+
+        if not user_apps_by_category:
+            enabled_apps = set()
+            for apps in APPS_AVAILABLE.values():
+                enabled_apps.update(a.lower() for a in apps)
+        else:
+            enabled_apps = {
+                app.lower()
+                for apps in user_apps_by_category.values()
+                for app in apps
+            }
+
+        sections_dict: dict[str, list[dict]] = {cat: [] for cat in CATEGORY_PRIORITY}
+
+        for item in all_items:
+            cat = item.get("category", "")
+            app = (item.get("source_app") or "").lower()
+            if cat not in sections_dict:
+                continue
+            if app not in enabled_apps:
+                continue
+            if len(sections_dict[cat]) >= MAX_ITEMS_PER_CATEGORY:
+                continue
+            sections_dict[cat].append({
+                "title": (item.get("title") or "").strip(),
+                "url": (item.get("url") or item.get("link") or "").strip(),
+                "source": (item.get("source") or "").strip(),
+                "source_app": (item.get("source_app") or "").strip(),
+            })
+
+        return [
+            {"category": cat, "items": sections_dict[cat]}
+            for cat in CATEGORY_PRIORITY
+            if sections_dict[cat]
+        ]
 
     def _build_market_section(self, snapshot: dict) -> str:
         """

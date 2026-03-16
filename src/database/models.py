@@ -1,9 +1,12 @@
 # src/database/models.py
-# Up-to-Celo — SQLAlchemy ORM models (P23 — single source of truth)
+# Up-to-Celo — SQLAlchemy async models.
+# Production: PostgreSQL via Neon (asyncpg driver).
+# Development: SQLite fallback (set DATABASE_URL in .env).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import os
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
@@ -14,22 +17,60 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
-    create_async_engine,
     async_sessionmaker,
+    create_async_engine,
 )
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-# ─── Engine and session factory (exposed for DatabaseManager) ─────────────────
+
+def _build_database_url() -> str:
+    """
+    Normalize DATABASE_URL for SQLAlchemy + asyncpg compatibility.
+
+    Neon provides:  postgres://user:pass@host.neon.tech/db?sslmode=require
+    asyncpg needs:  postgresql+asyncpg://user:pass@host.neon.tech/db
+                    (SSL handled separately via connect_args — not query param)
+    """
+    url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/uptocelo.db")
+
+    # Fix Neon/Render's legacy postgres:// prefix
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+
+    # asyncpg does not support ?sslmode= as a query parameter — strip it
+    if "?sslmode=" in url:
+        url = url.split("?sslmode=")[0]
+
+    return url
+
+
+DATABASE_URL = _build_database_url()
+
+# Require TLS for Neon (enforced server-side); no-op for SQLite
+# asyncpg expects ssl=True or SSLContext, not the string "require"
+_is_postgres = DATABASE_URL.startswith("postgresql")
+_connect_args = {"ssl": True} if _is_postgres else {}
 
 engine = create_async_engine(
-    "sqlite+aiosqlite:///data/uptocelo.db",
-    echo=False,  # set to True only for debug
+    DATABASE_URL,
+    echo=False,
+    # Neon free tier caps at 10 total connections — keep pool conservative
+    pool_size=3,
+    max_overflow=2,
+    # Detect stale connections dropped by Neon's 5-min idle timeout
+    pool_pre_ping=True,
+    connect_args=_connect_args,
 )
 
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
 # ─── Declarative base ─────────────────────────────────────────────────────────
@@ -38,8 +79,8 @@ class Base(DeclarativeBase):
     pass
 
 
-# ─── Apps available (23 apps across 7 categories) ─────────────────────────────
-# If a 24th app is added to the roadmap, update this dict and re-run init_db.
+# ─── Apps available (24 apps across 4 merged categories) ─────────────────────────
+# Category keys must match CATEGORY_DISPLAY in src/bot/keyboards.py.
 
 APPS_AVAILABLE: dict[str, list[str]] = {
     "payments": ["minipay", "valora", "halofi", "hurupay"],
@@ -53,11 +94,21 @@ APPS_AVAILABLE: dict[str, list[str]] = {
         "equalizer",
         "uniswap",
     ],
-    "onramp": ["celocashflow", "unipos"],
-    "nfts": ["octoplace", "hypermove", "truefeedback"],
-    "refi": ["toucan", "toucanrefi"],
-    "social": ["impactmarket", "masa"],
-    "network": ["celonetwork", "celoreserve"],
+    "onramp_nft": [
+        "celocashflow",
+        "unipos",
+        "octoplace",
+        "hypermove",
+        "truefeedback",
+    ],
+    "refi_social": [
+        "toucan",
+        "toucanrefi",
+        "impactmarket",
+        "masa",
+        "celonetwork",
+        "celoreserve",
+    ],
 }
 
 
@@ -74,7 +125,7 @@ class User(Base):
     subscribed: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     last_digest_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
@@ -86,8 +137,12 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True)
+    wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True, unique=True)
     # Celo wallet address provided by the user for payment verification
+    premium_tx_hash: Mapped[Optional[str]] = mapped_column(
+        String(66), nullable=True, unique=True
+    )
+    # tx hash used to activate premium — prevents replay attacks
 
     __table_args__ = (
         Index("ix_users_subscribed", "subscribed"),
@@ -126,7 +181,7 @@ class DigestLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     recipients_count: Mapped[int] = mapped_column(Integer, default=0)
     groq_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -144,7 +199,7 @@ class FetcherLog(Base):
     # Values: "rss" | "twitter" | "market" | "onchain"
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     items_count: Mapped[int] = mapped_column(Integer, default=0)
     cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)

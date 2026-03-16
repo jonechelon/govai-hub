@@ -1,1 +1,1 @@
-# Up-to-Celo — tests package
+# Required to make tests/ a Python package.

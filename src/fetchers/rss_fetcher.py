@@ -8,12 +8,12 @@ import json
 import logging
 import time
 from datetime import datetime
-from pathlib import Path
 
 import aiohttp
 import feedparser
 
 from src.utils.config_loader import CONFIG
+from src.utils.paths import RSS_CACHE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def _parse_published(entry: dict) -> str:
 class RSSFetcher:
     """Fetches and caches RSS/Atom feed items from Celo ecosystem sources."""
 
-    CACHE_FILE = Path("data/cache/rss_cache.json")
+    CACHE_FILE = RSS_CACHE_PATH
     CACHE_TTL_MINUTES = 30
     MAX_ITEMS_PER_FEED = 5
     REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -138,7 +138,7 @@ class RSSFetcher:
                 "title": (entry.get("title") or "No title").strip(),
                 "url": link,
                 "source": feed["source"],
-                "source_app": feed["source_app"],
+                "source_app": feed["source_app"].lower(),
                 "category": feed["category"],
                 "published": _parse_published(entry),
             }

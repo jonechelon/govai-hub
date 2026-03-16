@@ -7,13 +7,12 @@ import asyncio
 import json
 import logging
 import time
-from pathlib import Path
-
 import aiohttp
 import feedparser
 
 from src.fetchers.rss_fetcher import _parse_published
 from src.utils.config_loader import CONFIG
+from src.utils.paths import TWITTER_CACHE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 class TwitterFetcher:
     """Fetches tweets from Celo ecosystem accounts via Nitter RSS instances."""
 
-    CACHE_FILE = Path("data/cache/twitter_cache.json")
+    CACHE_FILE = TWITTER_CACHE_PATH
     CACHE_TTL_MINUTES = 30
     MAX_ITEMS_PER_ACCOUNT = 5
     REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -149,7 +148,7 @@ class TwitterFetcher:
                         "title": title,
                         "url": url_entry,
                         "source": f"@{handle}",
-                        "source_app": account.get("source_app", ""),
+                        "source_app": account.get("source_app", "").lower(),
                         "category": account.get("category", ""),
                         "published": _parse_published(entry),
                     })

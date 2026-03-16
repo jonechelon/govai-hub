@@ -5,31 +5,29 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from pathlib import Path
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from src.bot.handlers import HELP_MESSAGE, PREMIUM_MESSAGE
 from src.bot.keyboards import (
+    CATEGORY_DISPLAY,
+    get_category_keyboard,
     get_details_keyboard,
     get_digest_keyboard,
+    get_links_keyboard,
     get_main_keyboard,
     get_premium_keyboard,
+    get_premium_plan_keyboard,
     get_settings_keyboard,
 )
 from src.database.manager import db
+from src.database.models import APPS_AVAILABLE
+from src.utils.cache_manager import cache
 from src.utils.env_validator import get_env_or_fail
 
 logger = logging.getLogger(__name__)
-
-DIGEST_CACHE_DIR = Path("data/cache")
-
-# Regex to extract URLs from digest text (limit to http(s) links)
-_URL_RE = re.compile(r"https?://[^\s\)\]\>\"]+")
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -55,20 +53,29 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _handle_ask(query, context, user_id, digest_id)
     elif data == "settings:open":
         await _handle_settings_open(query, context, user_id)
+    elif data.startswith("settings:category:"):
+        cat_key = data.split(":", 2)[2]
+        await _handle_settings_category(query, context, user_id, cat_key)
     elif data == "settings_close":
         await _handle_settings_close(query)
     elif data.startswith("toggle_app:"):
         await _handle_toggle_app(query, user_id)
     elif data == "premium:open":
         await _handle_premium_open(query, context, user_id)
-    elif data in ("premium:7d", "premium:30d"):
-        await _handle_premium_info(query, data)
+    elif data == "premium:7d":
+        await _handle_premium_plan(query, user_id, days=7)
+    elif data == "premium:30d":
+        await _handle_premium_plan(query, user_id, days=30)
     elif data == "premium:confirm":
         await _handle_premium_confirm(query)
+    elif data == "premium:back":
+        await _handle_premium_back(query, user_id)
     elif data.startswith("back:"):
         await _handle_back(query, user_id)
     elif data == "help:open":
         await _handle_help_open(query)
+    elif data == "resubscribe":
+        await _handle_resubscribe(query, user_id)
     else:
         logger.warning("[CALLBACK] Unknown callback_data: %s from user %d", data, user_id)
 
@@ -87,15 +94,9 @@ async def _handle_digest_latest(
 
 async def _handle_details(query, context: ContextTypes.DEFAULT_TYPE, digest_id: str) -> None:
     """Expand the digest message to full view with the details keyboard."""
-    cache_file = DIGEST_CACHE_DIR / f"digest_{digest_id}.json"
-    if not cache_file.exists():
+    payload = await cache.get_digest(digest_id)
+    if not payload:
         await query.answer("⚠️ Digest not found. It may have expired.", show_alert=True)
-        return
-    try:
-        payload = json.loads(cache_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.error("[DETAILS] Failed to load digest %s | error: %s", digest_id, exc)
-        await query.answer("❌ Failed to load digest.", show_alert=True)
         return
     text = payload.get("text", "")
     if not text:
@@ -112,47 +113,115 @@ async def _handle_details(query, context: ContextTypes.DEFAULT_TYPE, digest_id: 
     logger.info("[DETAILS] Digest %s loaded for user in details view", digest_id)
 
 
-async def _handle_links(query, context: ContextTypes.DEFAULT_TYPE, digest_id: str) -> None:
-    """List up to 15 unique URLs from the digest cache."""
-    cache_file = DIGEST_CACHE_DIR / f"digest_{digest_id}.json"
-    if not cache_file.exists():
-        await query.answer("⚠️ Digest not found.", show_alert=True)
-        return
+async def _extract_links_from_digest(digest_id: str) -> list[dict]:
+    """
+    Load digest from cache and extract all URLs with title and source.
+    Returns a list of dicts: [{title, url, source}, ...]
+    Limits to 15 links maximum.
+    """
+    data = await cache.get_digest(digest_id)
+    if not data:
+        logger.warning("[LINKS] Cache not found or expired | digest_id=%s", digest_id)
+        return []
+
     try:
-        raw = cache_file.read_text(encoding="utf-8")
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("[CALLBACK] Failed to read digest cache %s: %s", digest_id, e)
-        await query.answer("⚠️ Digest not found.", show_alert=True)
+        sections = data.get("sections", [])
+        links: list[dict] = []
+
+        for section in sections:
+            items = section.get("items", [])
+            for item in items:
+                url = item.get("url") or item.get("link") or ""
+                if not url or not url.startswith("http"):
+                    continue
+
+                title = item.get("title") or item.get("name") or "No title"
+                source = (
+                    item.get("source")
+                    or item.get("source_app")
+                    or section.get("category", "")
+                    or "Unknown"
+                )
+
+                if any(lk["url"] == url for lk in links):
+                    continue
+
+                links.append({
+                    "title": title.strip() if isinstance(title, str) else "No title",
+                    "url": url.strip(),
+                    "source": source.strip() if isinstance(source, str) else str(source),
+                })
+
+                if len(links) >= 15:
+                    return links
+
+        return links
+
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        logger.error(
+            "[LINKS] Failed to parse digest cache | digest_id=%s | error=%s",
+            digest_id,
+            exc,
+        )
+        return []
+
+
+async def _handle_links(
+    query, context: ContextTypes.DEFAULT_TYPE, digest_id: str
+) -> None:
+    """
+    Handle links:{digest_id} callback.
+    Extracts URLs from cached digest and displays a numbered list.
+    """
+    user_id = query.from_user.id if query.from_user else 0
+    links = await _extract_links_from_digest(digest_id)
+
+    logger.info(
+        "[LINKS] Requested | user=%s | digest_id=%s | links_found=%s",
+        user_id,
+        digest_id,
+        len(links),
+    )
+
+    if not links:
+        await query.edit_message_text(
+            "No links found for this digest.\n\n"
+            "The digest cache may have expired (TTL: 24h).",
+            reply_markup=get_links_keyboard(digest_id),
+        )
         return
-    text = payload.get("text", "")
-    urls = list(dict.fromkeys(_URL_RE.findall(text)))[:15]
-    if not urls:
-        await query.message.reply_text("🔗 No links found in this digest.")
-        return
-    lines = [f"{i}. {u}" for i, u in enumerate(urls, 1)]
-    body = "\n".join(lines)
-    header = f"🔗 *Links — Digest {digest_id}*\n\n"
-    back_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("← Back to digest", callback_data=f"details:{digest_id}")]
-    ])
-    await query.message.reply_text(
-        header + body,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=back_keyboard,
+
+    lines = [f"Links from this digest ({len(links)} found)\n"]
+
+    for i, link in enumerate(links, start=1):
+        title = (
+            link["title"][:60] + "…"
+            if len(link["title"]) > 60
+            else link["title"]
+        )
+        source = link["source"]
+        url = link["url"]
+        lines.append(f"{i}. {title}\n   {source} — {url}\n")
+
+    full_text = "\n".join(lines)
+    if len(full_text) > 4000:
+        full_text = full_text[:3950] + "\n\n… (truncated)"
+
+    await query.edit_message_text(
+        full_text,
+        reply_markup=get_links_keyboard(digest_id),
+        disable_web_page_preview=True,
     )
 
 
 async def _handle_back(query, user_id: int) -> None:
     """Return to digest original view with the standard digest keyboard."""
     digest_id = query.data.split(":", 1)[1]
-    cache_file = DIGEST_CACHE_DIR / f"digest_{digest_id}.json"
-    try:
-        payload = json.loads(cache_file.read_text(encoding="utf-8"))
-        text = payload.get("text", "")
-    except Exception:
+    payload = await cache.get_digest(digest_id)
+    if not payload:
         await query.answer("❌ Could not reload digest.", show_alert=True)
         return
+    text = payload.get("text", "")
     if not text:
         await query.answer("❌ Could not reload digest.", show_alert=True)
         return
@@ -174,13 +243,13 @@ async def _handle_ask(
     context.user_data["ask_digest_id"] = digest_id
     context.user_data["ask_active"] = True
     msg = (
-        "🤖 *Ask AI — Celo Ecosystem*\n\n"
+        "🤖 Ask AI — Celo Ecosystem\n\n"
         "Ask anything about the Celo ecosystem.\n"
         "I'll use this digest as context.\n\n"
-        "Type your question now, or use /ask <question>\n"
+        "Type your question now, or use /ask [question]\n"
         "Type /stop to end this session."
     )
-    await query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await query.message.reply_text(msg)
 
 
 # ── settings ───────────────────────────────────────────────────────────────────
@@ -188,14 +257,32 @@ async def _handle_ask(
 async def _handle_settings_open(
     query, context: ContextTypes.DEFAULT_TYPE, user_id: int
 ) -> None:
-    """Open settings menu with app toggles reflecting live DB state."""
+    """Open root settings menu with 4 category buttons."""
     user_apps = await db.get_user_apps_by_category(user_id)
-    text = "⚙️ <b>Up-to-Celo — Select Your Apps</b>\n\nTap an app to toggle it on/off."
+    text = (
+        "⚙️ Up-to-Celo — Select Your Apps\n\n"
+        "Tap a category to manage its apps.\n"
+        "✅ = all enabled  ☑️ = some enabled  ☐ = none"
+    )
     try:
         await query.message.edit_text(
             text,
-            parse_mode=ParseMode.HTML,
             reply_markup=get_settings_keyboard(user_apps),
+        )
+    except BadRequest:
+        pass
+
+
+async def _handle_settings_category(
+    query, context: ContextTypes.DEFAULT_TYPE, user_id: int, cat_key: str
+) -> None:
+    """Show category submenu with app toggles for the selected category."""
+    user_apps = await db.get_user_apps_by_category(user_id)
+    emoji, label = CATEGORY_DISPLAY.get(cat_key, ("⚙️", cat_key))
+    try:
+        await query.message.edit_text(
+            f"{emoji} {label} — tap to toggle apps",
+            reply_markup=get_category_keyboard(cat_key, user_apps),
         )
     except BadRequest:
         pass
@@ -213,19 +300,23 @@ async def _handle_settings_close(query) -> None:
 
 
 async def _handle_toggle_app(query, user_id: int) -> None:
-    """Toggle one app and refresh the settings keyboard with updated DB state.
-
-    app_name is read directly from query.data as lowercase — no display-name conversion needed.
-    """
+    """Toggle one app and refresh the category submenu (not the root)."""
     app_name: str = query.data.split(":", 1)[1]
 
-    user_apps = await db.get_user_apps_by_category(user_id)
-    enabled_apps = [a for apps in user_apps.values() for a in apps]
-    currently_enabled = app_name in enabled_apps
+    cat_key = next(
+        (cat for cat, apps in APPS_AVAILABLE.items() if app_name in apps),
+        None,
+    )
+    if not cat_key:
+        await query.answer("App not found.", show_alert=True)
+        return
 
-    # Guard: never disable the last enabled app
-    if currently_enabled and await db.count_enabled_apps(user_id) <= 1:
-        await query.answer("⚠️ Select at least one app.", show_alert=True)
+    user_apps = await db.get_user_apps_by_category(user_id)
+    all_enabled = [a for apps in user_apps.values() for a in apps]
+    currently_enabled = app_name in user_apps.get(cat_key, [])
+
+    if currently_enabled and len(all_enabled) <= 1:
+        await query.answer("Select at least one app.", show_alert=True)
         return
 
     await db.update_user_app(user_id, app_name, enabled=not currently_enabled)
@@ -233,7 +324,7 @@ async def _handle_toggle_app(query, user_id: int) -> None:
     updated_apps = await db.get_user_apps_by_category(user_id)
     try:
         await query.edit_message_reply_markup(
-            reply_markup=get_settings_keyboard(updated_apps),
+            reply_markup=get_category_keyboard(cat_key, updated_apps),
         )
     except BadRequest:
         pass
@@ -256,7 +347,7 @@ async def _handle_premium_open(
     bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
     if is_premium:
         text = (
-            "⭐ *You're already Premium!*\n\n"
+            "⭐ You're already Premium!\n\n"
             "Enjoy unlimited AI asks with llama-3.3-70b-versatile.\n"
             "Use /status to check your expiration date."
         )
@@ -265,34 +356,111 @@ async def _handle_premium_open(
     try:
         await query.message.edit_text(
             text,
-            parse_mode=ParseMode.MARKDOWN,
             reply_markup=get_premium_keyboard(),
         )
     except BadRequest:
         pass
 
 
-async def _handle_premium_info(query, data: str) -> None:
-    """Show short premium plan info in alert."""
-    if data == "premium:7d":
-        msg = (
-            "⭐ 7-day Premium: send 0.50 cUSD to the bot wallet, then tap \"I sent\"."
+async def _handle_premium_plan(query, user_id: int, days: int) -> None:
+    """Show plan-specific instructions and wallet status after user selects 7d or 30d."""
+    bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
+    amount = 7 if days == 7 else 20
+    label = f"{days}-day Premium"
+    user_wallet = await db.get_wallet(user_id)
+
+    if user_wallet:
+        wallet_line = (
+            f"Your registered wallet:\n"
+            f"{user_wallet}\n\n"
+            f"Just send {amount} CELO to the address below — "
+            f"Premium activates automatically in ~60s."
         )
     else:
-        msg = (
-            "⭐ 30-day Premium: send 1.50 cUSD to the bot wallet, then tap \"I sent\"."
+        wallet_line = (
+            f"No wallet registered yet.\n"
+            f"Use /setwallet 0xYourWallet for automatic activation.\n\n"
+            f"Or send {amount} CELO and use /confirmpayment 0xTxHash."
         )
-    await query.answer(msg, show_alert=True)
+
+    try:
+        await query.edit_message_text(
+            f"{label} selected\n\n"
+            f"Amount: {amount} CELO\n\n"
+            f"Send to:\n"
+            f"{bot_wallet}\n\n"
+            f"{wallet_line}\n\n"
+            f"Paid via exchange? Use:\n"
+            f"/confirmpayment 0xTxHash",
+            reply_markup=get_premium_plan_keyboard(days),
+        )
+    except BadRequest:
+        pass
 
 
 async def _handle_premium_confirm(query) -> None:
-    """Redirect user to /confirmpayment command."""
-    await query.message.reply_text(
-        "✅ *Confirm your payment*\n\n"
-        "Send the transaction hash using:\n"
-        "`/confirmpayment <tx_hash>`\n\n"
-        "Example:\n`/confirmpayment 0xabc123...`",
-        parse_mode=ParseMode.MARKDOWN,
+    """Instruct user to confirm payment with /confirmpayment and where to find tx hash."""
+    try:
+        await query.edit_message_text(
+            "To confirm your payment, send the transaction hash:\n\n"
+            "/confirmpayment 0xYourTxHash\n\n"
+            "Find your tx hash at:\n"
+            "https://celo.blockscout.com",
+        )
+    except BadRequest:
+        pass
+
+
+async def _handle_premium_back(query, user_id: int) -> None:
+    """Return to the main premium plans screen."""
+    bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
+    user_wallet = await db.get_wallet(user_id)
+
+    wallet_line = (
+        f"Registered wallet: {user_wallet}"
+        if user_wallet
+        else "No wallet registered. Use /setwallet 0xYourWallet for auto-activation."
+    )
+
+    try:
+        await query.edit_message_text(
+            f"Premium plans — Up-to-Celo\n\n"
+            f"7-day Premium  — 7 CELO\n"
+            f"30-day Premium — 20 CELO\n\n"
+            f"Send CELO to:\n"
+            f"{bot_wallet}\n\n"
+            f"Send from a personal wallet (MiniPay, Valora, MetaMask).\n"
+            f"Exchanges use intermediate addresses and won't be detected.\n\n"
+            f"After sending, tap the button below or use:\n"
+            f"/confirmpayment [tx_hash]\n\n"
+            f"{wallet_line}",
+            reply_markup=get_premium_keyboard(),
+        )
+    except BadRequest:
+        pass
+
+
+# ── resubscribe ────────────────────────────────────────────────────────────────
+
+async def _handle_resubscribe(query, user_id: int) -> None:
+    """Handle Re-subscribe button from unsubscribe flow (idempotent)."""
+    from src.bot.handlers import _next_digest_str
+
+    user = await db.get_user(user_id)
+    if user and user.subscribed:
+        await query.edit_message_text(
+            "You are already subscribed!\n\n"
+            f"Next digest: {_next_digest_str()}"
+        )
+        return
+
+    await db.update_subscription(user_id, True)
+    logger.info("[RESUBSCRIBE] User re-subscribed | user=%s", user_id)
+
+    await query.edit_message_text(
+        "Welcome back! You are now re-subscribed.\n\n"
+        f"Next digest: {_next_digest_str()}\n\n"
+        "Use /settings to customize which apps you follow."
     )
 
 
@@ -300,7 +468,7 @@ async def _handle_premium_confirm(query) -> None:
 
 async def _handle_help_open(query) -> None:
     """Show help message inline."""
-    await query.message.reply_text(HELP_MESSAGE, parse_mode=ParseMode.MARKDOWN)
+    await query.message.reply_text(HELP_MESSAGE)
 
 
 # ── export for app.py ──────────────────────────────────────────────────────────

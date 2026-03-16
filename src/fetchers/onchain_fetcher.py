@@ -8,12 +8,11 @@ import json
 import logging
 import time
 from datetime import datetime
-from pathlib import Path
-
 from web3 import Web3
 
 from src.utils.config_loader import CONFIG
 from src.utils.env_validator import get_env_or_fail
+from src.utils.paths import ONCHAIN_CACHE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ ERC20_TOTAL_SUPPLY_ABI = [
 class OnChainFetcher:
     """Fetches on-chain data from Celo (block number, cUSD/cEUR/cREAL supplies) via web3.py."""
 
-    CACHE_FILE = Path("data/cache/onchain_cache.json")
+    CACHE_FILE = ONCHAIN_CACHE_PATH
     CACHE_TTL_MINUTES = 5  # shorter TTL — block data changes every ~5s
     RPC_TIMEOUT = 10  # seconds
 

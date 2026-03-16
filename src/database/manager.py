@@ -1,18 +1,19 @@
 # src/database/manager.py
-# Up-to-Celo — DatabaseManager singleton (async, SQLAlchemy + aiosqlite)
+# Up-to-Celo — DatabaseManager singleton (async, SQLAlchemy + asyncpg / Neon)
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.models import (
     APPS_AVAILABLE,
     AsyncSessionLocal,
     DigestLog,
+    FetcherLog,
     User,
     UserAppFilter,
     init_db as models_init_db,
@@ -83,6 +84,17 @@ class DatabaseManager:
                     )
                 )
 
+    # ─── get_user ───────────────────────────────────────────────────────────
+
+    async def get_user(self, user_id: int) -> User | None:
+        """Fetch a single user by user_id. Returns None if not found."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(User).where(User.user_id == user_id)
+                )
+                return result.scalar_one_or_none()
+
     # ─── update_subscription ────────────────────────────────────────────────
 
     async def update_subscription(self, user_id: int, subscribed: bool) -> None:
@@ -107,6 +119,102 @@ class DatabaseManager:
                     select(User.user_id).where(User.subscribed == True)  # noqa: E712
                 )
                 return list(result.scalars().all())
+
+    # ─── count_subscribers ───────────────────────────────────────────────────
+
+    async def count_subscribers(self) -> int:
+        """Count users with subscribed=True."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(func.count()).select_from(User).where(
+                        User.subscribed == True  # noqa: E712
+                    )
+                )
+                return result.scalar_one() or 0
+
+    # ─── count_premium_users ─────────────────────────────────────────────────
+
+    async def count_premium_users(self) -> int:
+        """Count users with active premium (tier=premium and premium_expires_at > now)."""
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(func.count()).select_from(User).where(
+                        User.tier == "premium",
+                        User.premium_expires_at > now,
+                    )
+                )
+                return result.scalar_one() or 0
+
+    # ─── get_last_digest_at ──────────────────────────────────────────────────
+
+    async def get_last_digest_at(self) -> datetime | None:
+        """Return the most recent DigestLog.generated_at timestamp."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(DigestLog.generated_at)
+                    .order_by(DigestLog.generated_at.desc())
+                    .limit(1)
+                )
+                return result.scalar_one_or_none()
+
+    # ─── get_last_fetch_at ───────────────────────────────────────────────────
+
+    async def get_last_fetch_at(self) -> datetime | None:
+        """Return the most recent FetcherLog.fetched_at timestamp."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(FetcherLog.fetched_at)
+                    .order_by(FetcherLog.fetched_at.desc())
+                    .limit(1)
+                )
+                return result.scalar_one_or_none()
+
+    # ─── count_digests_today ─────────────────────────────────────────────────
+
+    async def count_digests_today(self) -> int:
+        """Count DigestLog entries created today (UTC)."""
+        today = datetime.now(timezone.utc).date()
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(func.count(DigestLog.id)).where(
+                        func.date(DigestLog.generated_at) == today
+                    )
+                )
+                return result.scalar_one() or 0
+
+    # ─── sum_groq_tokens_today ───────────────────────────────────────────────
+
+    async def sum_groq_tokens_today(self) -> int:
+        """Sum of Groq tokens used in DigestLog today (UTC)."""
+        today = datetime.now(timezone.utc).date()
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(func.sum(DigestLog.groq_tokens)).where(
+                        func.date(DigestLog.generated_at) == today
+                    )
+                )
+                return int(result.scalar_one() or 0)
+
+    # ─── count_errors_today ──────────────────────────────────────────────────
+
+    async def count_errors_today(self) -> int:
+        """Count DigestLog entries with errors > 0 today (UTC)."""
+        today = datetime.now(timezone.utc).date()
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(func.sum(DigestLog.errors)).where(
+                        func.date(DigestLog.generated_at) == today
+                    )
+                )
+                return int(result.scalar_one() or 0)
 
     # ─── get_user_apps ───────────────────────────────────────────────────────
 
@@ -232,13 +340,17 @@ class DatabaseManager:
         expires_at: datetime,
         tx_hash: str,
     ) -> None:
-        """Set tier=premium and premium_expires_at. tx_hash is for log only."""
+        """Set tier=premium, premium_expires_at, and premium_tx_hash for replay protection."""
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 await session.execute(
                     update(User)
                     .where(User.user_id == user_id)
-                    .values(tier="premium", premium_expires_at=expires_at)
+                    .values(
+                        tier="premium",
+                        premium_expires_at=expires_at,
+                        premium_tx_hash=tx_hash,
+                    )
                 )
         logger.info(
             "[DB] User %s upgraded to premium until %s | tx: %s",
@@ -246,6 +358,75 @@ class DatabaseManager:
             expires_at,
             tx_hash,
         )
+
+    # ─── is_tx_hash_used ─────────────────────────────────────────────────────
+
+    async def is_tx_hash_used(self, tx_hash: str) -> bool:
+        """Return True if tx_hash was already used to activate Premium (replay protection)."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(User).where(User.premium_tx_hash == tx_hash)
+                )
+                return result.scalar_one_or_none() is not None
+
+    # ─── set_premium ─────────────────────────────────────────────────────────
+
+    async def set_premium(
+        self,
+        user_id: int,
+        expires_at: datetime,
+        tx_hash: str,
+    ) -> None:
+        """Activate premium for user — stores tx_hash to prevent replay attacks."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(select(User).where(User.user_id == user_id))
+                user = result.scalar_one_or_none()
+                if user:
+                    user.tier = "premium"
+                    user.premium_expires_at = expires_at
+                    user.premium_tx_hash = tx_hash
+        logger.info("[DB] Premium set | user=%s | expires=%s | tx=%s", user_id, expires_at, tx_hash)
+
+    # ─── set_wallet ───────────────────────────────────────────────────────────
+
+    async def set_wallet(self, user_id: int, wallet_address: str) -> None:
+        """Save or update the user's personal Celo wallet address."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(select(User).where(User.user_id == user_id))
+                user = result.scalar_one_or_none()
+                if user:
+                    user.wallet_address = wallet_address
+        logger.info("[DB] Wallet set | user=%s | wallet=%s", user_id, wallet_address)
+
+    # ─── get_wallet ───────────────────────────────────────────────────────────
+
+    async def get_wallet(self, user_id: int) -> str | None:
+        """Return the registered wallet address for a user, or None."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(select(User).where(User.user_id == user_id))
+                user = result.scalar_one_or_none()
+                return user.wallet_address if user else None
+
+    # ─── get_user_by_wallet ───────────────────────────────────────────────────
+
+    async def get_user_by_wallet(self, wallet_address: str) -> int | None:
+        """Look up user_id by registered wallet address (case-insensitive).
+
+        Returns user_id if found, None otherwise.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(User).where(
+                        func.lower(User.wallet_address) == wallet_address.lower()
+                    )
+                )
+                user = result.scalar_one_or_none()
+                return user.user_id if user else None
 
     # ─── downgrade_expired_users ──────────────────────────────────────────────
 

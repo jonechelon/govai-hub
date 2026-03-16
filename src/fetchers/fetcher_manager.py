@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime
-from pathlib import Path
 
 from src.fetchers.market_fetcher import MarketFetcher
 from src.fetchers.onchain_fetcher import OnChainFetcher
 from src.fetchers.rss_fetcher import RSSFetcher
 from src.fetchers.twitter_fetcher import TwitterFetcher
+from src.utils.cache_manager import cache
 
 logger = logging.getLogger(__name__)
-
-SNAPSHOT_FILE = Path("data/cache/full_snapshot.json")
-SNAPSHOT_TTL_MIN = 30
 
 
 class FetcherManager:
@@ -47,35 +43,32 @@ class FetcherManager:
             dict with keys: rss, twitter, market, onchain, fetched_at.
         """
         if not force:
-            cached = self._load_snapshot()
-            if cached:
-                age = (time.time() - cached["_saved_at"]) / 60
-                logger.info(f"[FETCH] Snapshot cache hit (age: {age:.1f}min)")
-                return {k: v for k, v in cached.items() if k != "_saved_at"}
+            snapshot = await cache.get_snapshot()
+            if snapshot:
+                age = cache.get_age_minutes("full_snapshot") or 0
+                logger.info("[FETCH] Snapshot cache hit (age: %.1fmin)", age)
+                return snapshot
 
         start = time.time()
+        logger.info("[FETCH] Starting parallel fetch of all sources...")
 
-        rss_result, twitter_result, market_result, onchain_result = await asyncio.gather(
-            self._rss.fetch_all(),
-            self._twitter.fetch_all(),
-            self._market.fetch(),
-            self._onchain.fetch(),
+        results = await asyncio.gather(
+            asyncio.wait_for(self._rss.fetch_all(),     timeout=15.0),
+            asyncio.wait_for(self._twitter.fetch_all(), timeout=15.0),
+            asyncio.wait_for(self._market.fetch(),      timeout=10.0),
+            asyncio.wait_for(self._onchain.fetch(),     timeout=10.0),
             return_exceptions=True,
         )
+        rss_result, twitter_result, market_result, onchain_result = results
 
         rss_items = rss_result if isinstance(rss_result, list) else []
         twitter_items = twitter_result if isinstance(twitter_result, list) else []
         market_data = market_result if isinstance(market_result, dict) else {}
         onchain_data = onchain_result if isinstance(onchain_result, dict) else {}
 
-        if isinstance(rss_result, Exception):
-            logger.error(f"[FETCH] RSS failed: {rss_result}")
-        if isinstance(twitter_result, Exception):
-            logger.error(f"[FETCH] Twitter failed: {twitter_result}")
-        if isinstance(market_result, Exception):
-            logger.error(f"[FETCH] Market failed: {market_result}")
-        if isinstance(onchain_result, Exception):
-            logger.error(f"[FETCH] OnChain failed: {onchain_result}")
+        for name, result in zip(["rss", "twitter", "market", "onchain"], results):
+            if isinstance(result, Exception):
+                logger.warning("[FETCH] %s fetcher failed: %s", name, result)
 
         elapsed = time.time() - start
         snapshot = {
@@ -94,60 +87,16 @@ class FetcherManager:
             f"| {elapsed:.1f}s"
         )
 
-        self._save_snapshot(snapshot)
+        await cache.set_snapshot(snapshot)
         return snapshot
 
-    def get_cached_snapshot(self) -> dict | None:
+    async def get_cached_snapshot(self) -> dict | None:
         """Return the on-disk snapshot without making any network requests.
 
         Returns:
-            Snapshot dict (without _saved_at) if a valid cache exists, else None.
+            Snapshot dict if a valid cache exists, else None.
         """
-        cached = self._load_snapshot()
-        if cached:
-            return {k: v for k, v in cached.items() if k != "_saved_at"}
-        return None
-
-    def _load_snapshot(self) -> dict | None:
-        """Load snapshot from disk if it exists and has not expired.
-
-        Returns:
-            Raw dict including _saved_at if valid, else None.
-        """
-        if not SNAPSHOT_FILE.exists():
-            return None
-
-        try:
-            data = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"[FETCH] Could not read snapshot file: {e}")
-            return None
-
-        saved_at = data.get("_saved_at")
-        if saved_at is None:
-            return None
-
-        age_min = (time.time() - saved_at) / 60
-        if age_min > SNAPSHOT_TTL_MIN:
-            return None
-
-        return data
-
-    def _save_snapshot(self, snapshot: dict) -> None:
-        """Persist snapshot to disk with an internal _saved_at timestamp.
-
-        Args:
-            snapshot: The snapshot dict to save (without _saved_at).
-        """
-        try:
-            SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            to_save = {**snapshot, "_saved_at": time.time()}
-            SNAPSHOT_FILE.write_text(
-                json.dumps(to_save, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError as e:
-            logger.warning(f"[FETCH] Failed to save snapshot: {e}")
+        return await cache.get_snapshot()
 
 
 # Module-level singleton — import this directly, never instantiate FetcherManager elsewhere
