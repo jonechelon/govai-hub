@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -27,11 +28,15 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+_raw_url = os.getenv("DATABASE_URL", "")
 
-if DATABASE_URL:
-    # Production: Neon PostgreSQL via asyncpg
-    # Neon requires ?sslmode=require — already in connection string
+if _raw_url:
+    # Force asyncpg driver — replace postgresql:// or postgres:// with postgresql+asyncpg://
+    DATABASE_URL = re.sub(
+        r"^postgres(ql)?://",
+        "postgresql+asyncpg://",
+        _raw_url,
+    )
     engine = create_async_engine(
         DATABASE_URL,
         echo=False,
