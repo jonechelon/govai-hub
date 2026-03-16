@@ -3,16 +3,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import signal
 import sys
 
+from src.utils.logger import logger
 from telegram import Update
-from telegram.ext import Application, ApplicationBuilder, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
+from telegram.ext import ContextTypes
 
 from src.bot.callbacks import callback_query_handler
 from src.bot.handlers import (
+    admin_stats_handler,
+    admin_broadcast_handler,
+    admin_digest_now_handler,
     ask_handler,
     confirm_payment_handler,
     digest_handler,
@@ -21,6 +33,7 @@ from src.bot.handlers import (
     inline_handler,
     premium_handler,
     settings_handler,
+    setwallet_handler,
     start_handler,
     status_handler,
     stop_handler,
@@ -29,31 +42,73 @@ from src.bot.handlers import (
 )
 from src.database.manager import DatabaseManager
 from src.scheduler.scheduler import scheduler
+from src.utils.cache_manager import cache as cache_manager
 from src.utils.config_loader import CONFIG
 from src.utils.env_validator import get_env_or_fail
-from src.utils.logger import setup_logger
-
-logger = logging.getLogger(__name__)
+from src.utils.health_check import HealthChecker, start_health_server
 
 # Singleton DB instance for lifecycle hooks
 db = DatabaseManager()
 
 
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log all unhandled exceptions and notify the user when possible."""
+    logger.error(
+        "[ERROR] Unhandled exception | update=%s | error=%s",
+        update,
+        context.error,
+        exc_info=context.error,
+    )
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "❌ Something went wrong. Please try again."
+            )
+        except Exception:
+            pass
+
+
 async def on_startup(application: Application) -> None:
     """Run once after the Application is initialized.
 
-    Order: init_db (tables ready) → scheduler.start() → downgrade_expired_users().
+    Order: init_db → downgrade_expired_users → scheduler.start() → health checker.
+    Stores uptime_start for /admin_stats and health check.
     """
+    from datetime import datetime, timezone
+
     await db.init_db()
-    await scheduler.start(application)
     await db.downgrade_expired_users()
-    logger.info("[STARTUP] DB initialized, scheduler started, expired users downgraded")
+    await scheduler.start(application, db=db)
+
+    # Start health check server for UptimeRobot monitoring (P40)
+    asyncio.create_task(start_health_server())
+
+    startup_time = datetime.now(timezone.utc)
+    application.bot_data["uptime_start"] = startup_time
+
+    # Start cache cleanup background task (runs every hour)
+    cache_manager.start_cleanup_task()
+
+    health_checker = HealthChecker(
+        db=db, bot=application.bot, start_time=startup_time
+    )
+    health_checker.start()
+    application.bot_data["health_checker"] = health_checker
+
+    logger.info(
+        "[STARTUP] DB initialized, scheduler started, "
+        "cache cleanup started, health checker started"
+    )
 
 
 async def on_shutdown(application: Application) -> None:
     """Run once after the Application has stopped."""
+    checker = application.bot_data.get("health_checker")
+    if checker:
+        checker.stop()
+    cache_manager.stop()
     await scheduler.shutdown()
-    logger.info("[SHUTDOWN] Up-to-Celo bot shutting down")
+    logger.info("[SHUTDOWN] Bot stopped gracefully")
 
 
 def build_application() -> Application:
@@ -79,12 +134,18 @@ def build_application() -> Application:
     application.add_handler(status_handler)
     application.add_handler(premium_handler)
     application.add_handler(confirm_payment_handler)
+    application.add_handler(setwallet_handler)
     application.add_handler(digest_handler)
     application.add_handler(settings_handler)
     application.add_handler(subscribe_handler)
     application.add_handler(unsubscribe_handler)
     application.add_handler(ask_handler)
     application.add_handler(stop_handler)
+
+    # Admin-only commands (ADMIN_CHAT_ID)
+    application.add_handler(CommandHandler("admin_stats", admin_stats_handler))
+    application.add_handler(CommandHandler("admin_broadcast", admin_broadcast_handler))
+    application.add_handler(CommandHandler("admin_digest_now", admin_digest_now_handler))
 
     # Callback query router (inline keyboards)
     application.add_handler(callback_query_handler)
@@ -97,13 +158,15 @@ def build_application() -> Application:
         MessageHandler(filters.TEXT & ~filters.COMMAND, free_text_handler)
     )
 
+    # Global error handler — catches all unhandled exceptions and logs them
+    application.add_error_handler(global_error_handler)
+
     return application
 
 
 def main() -> None:
     """Main entrypoint: validate environment, build application, and start polling."""
-    # Step 1: initialize logging before anything else
-    setup_logger()
+    # Step 1: logger already initialized on import (src.utils.logger)
 
     # Step 2: validate all required environment variables
     # Fails fast with descriptive error if any var is missing
