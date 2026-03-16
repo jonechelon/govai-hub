@@ -9,6 +9,7 @@ services:
     # Pin to match local development environment
     buildCommand: pip install -r requirements.txt
     startCommand: python -m src.bot.app
+    healthCheckPath: /health
     plan: free
 
     envVars:
