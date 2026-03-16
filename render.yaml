@@ -7,12 +7,13 @@ services:
     name: up-to-celo
     runtime: python
     # Pin to match local development environment
-    pythonVersion: "3.12.3"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m src.bot.app
     plan: free
 
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.3"
       # ── Telegram ──────────────────────────────────────────────────
       - key: TELEGRAM_BOT_TOKEN
         sync: false                    # set manually in Render dashboard
