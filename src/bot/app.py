@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sys
 
@@ -132,17 +133,20 @@ def main() -> None:
     try:
         application = build_application()
         logger.info(
-            "[STARTUP] Up-to-Celo bot started | version: 1.1 | webhook: polling"
+            "[STARTUP] Up-to-Celo bot started | version: 1.1 | mode: webhook"
         )
 
-        # Step 7: start polling — blocks until stopped
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
+        # Step 7: start webhook server — blocks until stopped
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.getenv("PORT", 10000)),
+            url_path="telegram",
+            webhook_url=os.getenv("WEBHOOK_URL"),
             drop_pending_updates=True,
         )
 
-        # Step 8: clean exit after run_polling returns (e.g. KeyboardInterrupt handled internally)
-        logger.info("[SHUTDOWN] Polling stopped — exiting cleanly")
+        # Step 8: clean exit after run_webhook returns (e.g. KeyboardInterrupt handled internally)
+        logger.info("[SHUTDOWN] Webhook server stopped — exiting cleanly")
         sys.exit(0)
 
     except KeyboardInterrupt:

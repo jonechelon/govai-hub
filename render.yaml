@@ -1,0 +1,75 @@
+# render.yaml — Render.com deployment manifest for Up-to-Celo
+# Database: Neon PostgreSQL (external) — no disk mount needed
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: up-to-celo
+    runtime: python
+    # Pin to match local development environment
+    pythonVersion: "3.12.3"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m src.bot.app
+    plan: free
+
+    envVars:
+      # ── Telegram ──────────────────────────────────────────────────
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false                    # set manually in Render dashboard
+
+      # ── AI (Groq) ─────────────────────────────────────────────────
+      - key: GROQ_API_KEY
+        sync: false                    # console.groq.com
+
+      # ── Admin ─────────────────────────────────────────────────────
+      - key: ADMIN_CHAT_ID
+        sync: false                    # your personal Telegram chat ID
+
+      # ── Blockchain / Wallet ───────────────────────────────────────
+      - key: BOT_WALLET_ADDRESS
+        sync: false                    # EIP-55 checksum — see .env.example
+      - key: BOT_WALLET_PRIVATE_KEY
+        sync: false                    # NEVER commit to Git
+      - key: CELO_RPC_URL
+        value: https://forno.celo.org
+      - key: CELO_RPC_FALLBACK_URL
+        value: https://rpc.ankr.com/celo
+
+      # ── Database (Neon PostgreSQL) ────────────────────────────────
+      - key: DATABASE_URL
+        sync: false                    # paste Neon pooled connection string
+
+      # ── HTTP Health Check (P40 — UptimeRobot ping) ────────────────
+      - key: PORT
+        value: "8080"
+
+      # ── Webhook (Telegram → Render) ───────────────────────────────
+      - key: WEBHOOK_URL
+        value: "https://up-to-celo.onrender.com/telegram"
+
+      # ── Logging (P39) ─────────────────────────────────────────────
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOG_TO_FILE
+        value: "false"                 # filesystem ephemeral — console only
+
+      # ── Scheduler ─────────────────────────────────────────────────
+      - key: DIGEST_SCHEDULE_TIME
+        value: "08:30"
+      - key: DIGEST_SCHEDULE_TIMEZONE
+        value: Europe/Madrid
+
+      # ── Nitter instances (Twitter RSS fallback) ───────────────────
+      # Comma-separated list — TwitterFetcher tries each in order
+      - key: NITTER_INSTANCES
+        value: "https://nitter.net,https://nitter.privacydev.net,https://nitter.poast.org"
+
+      # ── Rate limiting ─────────────────────────────────────────────
+      - key: ASK_DAILY_LIMIT_FREE
+        value: "3"                     # free tier: 3 ask queries/day
+      - key: DIGEST_COOLDOWN_MINUTES
+        value: "60"                    # manual /digest cooldown
+
+      # ── cUSD payments (Celo Mainnet) ──────────────────────────────
+      - key: CUSD_CONTRACT_ADDRESS
+        value: "0x765DE816845861e75A25fCA122bb6898B8B1282a"
