@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+import ssl
 from datetime import datetime
 from typing import Optional
 
@@ -31,22 +32,26 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 _raw_url = os.getenv("DATABASE_URL", "")
 
 if _raw_url:
-    # Force asyncpg driver — replace postgresql:// or postgres:// with postgresql+asyncpg://
-    DATABASE_URL = re.sub(
-        r"^postgres(ql)?://",
-        "postgresql+asyncpg://",
-        _raw_url,
-    )
+    # Remove sslmode query param — asyncpg uses ssl= kwarg instead
+    _clean_url = re.sub(r"[?&]sslmode=\w+", "", _raw_url)
+    # Force asyncpg driver
+    _clean_url = re.sub(r"^postgres(ql)?://", "postgresql+asyncpg://", _clean_url)
+
+    # SSL context for Neon PostgreSQL
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = ssl.CERT_NONE
+
     engine = create_async_engine(
-        DATABASE_URL,
+        _clean_url,
         echo=False,
         pool_size=5,
         max_overflow=10,
+        connect_args={"ssl": _ssl_ctx},
     )
 else:
     # Development fallback: local SQLite
     from src.utils.paths import DATA_DIR
-
     SQLITE_PATH = DATA_DIR / "up-to-celo.db"
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{SQLITE_PATH}",
