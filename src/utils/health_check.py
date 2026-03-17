@@ -50,9 +50,23 @@ async def _health_handler(request: web.Request) -> web.Response:
 
 async def start_health_server() -> None:
     """
-    Start the aiohttp health server as a long-running background task.
-    PORT is injected by Render automatically — defaults to 8080.
+    Historical standalone aiohttp health server for GET /health.
+
+    In webhook mode this server MUST NOT bind to PORT because the PTB
+    webhook server already owns the same port. The /health endpoint is
+    now exposed by the webhook aiohttp application (see src.bot.app),
+    so this function is effectively disabled by default to avoid two
+    HTTP servers competing on port 8080.
     """
+    if os.getenv("HEALTH_SERVER_DISABLED", "1") == "1":
+        # Standalone health server is disabled; /health is served by the
+        # PTB webhook aiohttp application instead to prevent port conflicts.
+        logger.info(
+            "[HEALTH] Standalone aiohttp health server disabled; "
+            "/health served by webhook app"
+        )
+        return
+
     port = int(os.getenv("PORT", "8080"))
     app = web.Application()
     app.router.add_get("/health", _health_handler)

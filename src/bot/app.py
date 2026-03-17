@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import os
 import signal
 import sys
+
+from aiohttp import web
 
 from src.utils.logger import logger
 from telegram import Update
@@ -45,7 +45,7 @@ from src.scheduler.scheduler import scheduler
 from src.utils.cache_manager import cache as cache_manager
 from src.utils.config_loader import CONFIG
 from src.utils.env_validator import get_env_or_fail
-from src.utils.health_check import HealthChecker, start_health_server
+from src.utils.health_check import HealthChecker, _health_handler
 
 # Singleton DB instance for lifecycle hooks
 db = DatabaseManager()
@@ -80,8 +80,10 @@ async def on_startup(application: Application) -> None:
     await db.downgrade_expired_users()
     await scheduler.start(application, db=db)
 
-    # Start health check server for UptimeRobot monitoring (P40)
-    asyncio.create_task(start_health_server())
+    # Standalone aiohttp health server is disabled in webhook mode because the
+    # PTB webhook server already binds to the same PORT. The /health endpoint
+    # is now exposed by the webhook aiohttp application instead (see
+    # build_application()) to avoid running two HTTP servers on port 8080.
 
     startup_time = datetime.now(timezone.utc)
     application.bot_data["uptime_start"] = startup_time
@@ -160,6 +162,17 @@ def build_application() -> Application:
 
     # Global error handler — catches all unhandled exceptions and logs them
     application.add_error_handler(global_error_handler)
+
+    # Expose GET /health on the same aiohttp application used by the PTB
+    # webhook server so that UptimeRobot can monitor the bot without a
+    # separate aiohttp server binding to port 8080.
+    try:
+        application.web_app.add_routes([web.get("/health", _health_handler)])
+        logger.info("[HEALTH] /health endpoint registered on webhook server")
+    except Exception as exc:
+        logger.warning(
+            "[HEALTH] Failed to register /health route on webhook server: %s", exc
+        )
 
     return application
 
