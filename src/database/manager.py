@@ -1,3 +1,27 @@
+"""--- NEON MIGRATION: run manually before first production deploy ---
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS governance_alerts (
+    proposal_id     BIGINT PRIMARY KEY,
+    proposer        VARCHAR(42) NOT NULL,
+    description_url VARCHAR(500),
+    deposit_celo    FLOAT,
+    queued_at       TIMESTAMPTZ NOT NULL,
+    block_number    BIGINT NOT NULL,
+    tx_hash         VARCHAR(66) NOT NULL UNIQUE,
+    sent_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS ix_governance_alerts_sent_at
+    ON governance_alerts(sent_at);
+
+CREATE INDEX IF NOT EXISTS ix_governance_alerts_queued_at
+    ON governance_alerts(queued_at);
+
+COMMIT;
+"""
+
 # src/database/manager.py
 # Up-to-Celo — DatabaseManager singleton (async, SQLAlchemy + asyncpg / Neon)
 
@@ -14,6 +38,7 @@ from src.database.models import (
     AsyncSessionLocal,
     DigestLog,
     FetcherLog,
+    GovernanceAlert,
     User,
     UserAppFilter,
     init_db as models_init_db,
@@ -468,6 +493,69 @@ class DatabaseManager:
         if user.premium_expires_at is None:
             return False
         return user.premium_expires_at > now
+
+    # ─── governance alerts ────────────────────────────────────────────────────
+
+    async def log_governance_alert(self, proposal: dict) -> None:
+        """Insert a governance proposal alert, ignoring duplicates by proposal_id."""
+        async with AsyncSessionLocal() as session:
+            alert = GovernanceAlert(
+                proposal_id=proposal["proposal_id"],
+                proposer=proposal["proposer"],
+                description_url=proposal.get("description_url"),
+                deposit_celo=proposal.get("deposit"),
+                queued_at=proposal["queued_at"],
+                block_number=proposal["block_number"],
+                tx_hash=proposal["tx_hash"],
+                sent_at=None,
+            )
+            try:
+                session.add(alert)
+                await session.commit()
+                logger.info(
+                    "[DB] Governance alert logged | proposal_id: %s | proposer: %s",
+                    proposal["proposal_id"],
+                    proposal["proposer"],
+                )
+            except Exception:
+                # Duplicate proposal_id or tx_hash — skip silently (idempotent)
+                await session.rollback()
+
+    async def get_unsent_alerts(self) -> list[GovernanceAlert]:
+        """Return all governance alerts not yet broadcast, ordered by queued_at ASC."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GovernanceAlert)
+                    .where(GovernanceAlert.sent_at.is_(None))
+                    .order_by(GovernanceAlert.queued_at.asc())
+                )
+                return list(result.scalars().all())
+
+    async def mark_alert_sent(self, proposal_id: int) -> None:
+        """Mark a governance alert as sent by setting sent_at to current UTC time."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GovernanceAlert).where(
+                        GovernanceAlert.proposal_id == proposal_id
+                    )
+                )
+                alert = result.scalar_one_or_none()
+                if alert:
+                    alert.sent_at = datetime.now(timezone.utc)
+                    await session.commit()
+
+    async def get_recent_alerts(self, limit: int = 5) -> list[GovernanceAlert]:
+        """Return the N most recent governance alerts for the /governance command."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GovernanceAlert)
+                    .order_by(GovernanceAlert.queued_at.desc())
+                    .limit(limit)
+                )
+                return list(result.scalars().all())
 
 
 db = DatabaseManager()

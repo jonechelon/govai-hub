@@ -15,6 +15,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -197,6 +198,29 @@ class FetcherLog(Base):
     items_count: Mapped[int] = mapped_column(Integer, default=0)
     cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
     error_msg: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
+
+class GovernanceAlert(Base):
+    """Tracks governance proposals fetched from Celo Mainnet."""
+
+    __tablename__ = "governance_alerts"
+
+    proposal_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    proposer: Mapped[str] = mapped_column(String(42), nullable=False)
+    description_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    deposit_celo: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tx_hash: Mapped[str] = mapped_column(String(66), nullable=False, unique=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # None = not yet sent; datetime = timestamp of successful broadcast
+
+    __table_args__ = (
+        Index("ix_governance_alerts_sent_at", "sent_at"),
+        Index("ix_governance_alerts_queued_at", "queued_at"),
+    )
 
 
 # ─── Schema initialization ───────────────────────────────────────────────────

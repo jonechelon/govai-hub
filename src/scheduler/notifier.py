@@ -7,15 +7,94 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, RetryAfter
+from telegram.helpers import escape_markdown
 
-from src.bot.keyboards import get_digest_keyboard
-from src.database.manager import db
 from src.ai.digest_generator import digest_generator
+from src.bot.keyboards import get_digest_keyboard
+from src.database.manager import DatabaseManager, db
+from src.database.models import GovernanceAlert
 from src.utils.health_check import set_last_digest_at
 
 logger = logging.getLogger(__name__)
+
+
+def _format_relative_time(dt: datetime) -> str:
+    """Return human-readable relative time (e.g. '2h ago')."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    delta = now - dt
+
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "just now"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        return f"{minutes}m ago"
+    elif seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours}h ago"
+    else:
+        days = seconds // 86400
+        return f"{days} days ago"
+
+
+def _shorten_address(address: str) -> str:
+    """Shorten a 0x address to 0x1234...abcd format."""
+    if len(address) < 10:
+        return address
+    return f"{address[:6]}...{address[-4:]}"
+
+
+def _build_governance_keyboard(tx_hash: str) -> InlineKeyboardMarkup:
+    """Build InlineKeyboard for a governance alert message."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🔗 CeloScan",
+                    url=f"https://celoscan.io/tx/{tx_hash}",
+                ),
+                InlineKeyboardButton(
+                    "📋 Forum",
+                    url="https://forum.celo.org/c/governance",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🗳️ How to Vote",
+                    url="https://docs.celo.org/protocol/governance",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_governance_message(alert: GovernanceAlert) -> str:
+    """Build the Markdown message text for a governance alert."""
+    proposer_short = _shorten_address(alert.proposer)
+    deposit_str = f"{alert.deposit_celo:.1f}" if alert.deposit_celo is not None else "N/A"
+    queued_relative = _format_relative_time(alert.queued_at)
+    safe_url = (
+        escape_markdown(alert.description_url, version=2)
+        if alert.description_url
+        else None
+    )
+    description = safe_url or "No description provided"
+
+    return (
+        "🏛️ *New Celo Governance Proposal*\n\n"
+        f"📋 *Proposal \\#{alert.proposal_id}*\n"
+        f"👤 Proposer: `{proposer_short}`\n"
+        f"💰 Deposit: {deposit_str} CELO\n"
+        f"🕐 Queued: {queued_relative}\n\n"
+        f"🔗 Description: {description}\n\n"
+        "Stay informed — vote on Celo governance matters\\! 🌿"
+    )
 
 
 class Notifier:
@@ -116,6 +195,80 @@ class Notifier:
         )
 
         return {"recipients": ok, "tokens": tokens, "errors": errors}
+
+    async def send_governance_alert(self, bot: Bot, alert: GovernanceAlert) -> None:
+        """Broadcast a governance proposal alert to all subscribed users."""
+        db_manager = DatabaseManager()
+        subscribers = await db_manager.get_all_subscribers()
+
+        if not subscribers:
+            logger.info("[GOVERNANCE] No subscribers — skipping broadcast")
+            return
+
+        text = _build_governance_message(alert)
+        keyboard = _build_governance_keyboard(alert.tx_hash)
+
+        ok_count = 0
+        error_count = 0
+
+        for user_id in subscribers:
+            try:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True,
+                )
+                ok_count += 1
+
+            except Forbidden:
+                await db_manager.update_subscription(user_id, False)
+                logger.info(
+                    "[GOVERNANCE] User %s blocked bot — unsubscribed",
+                    user_id,
+                )
+
+            except RetryAfter as e:
+                logger.warning(
+                    "[GOVERNANCE] RetryAfter %ss for user %s — retrying",
+                    e.retry_after,
+                    user_id,
+                )
+                await asyncio.sleep(e.retry_after)
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=keyboard,
+                        disable_web_page_preview=True,
+                    )
+                    ok_count += 1
+                except Exception as retry_err:
+                    logger.error(
+                        "[GOVERNANCE] Retry failed for user %s: %s",
+                        user_id,
+                        retry_err,
+                    )
+                    error_count += 1
+
+            except Exception as e:
+                logger.error(
+                    "[GOVERNANCE] Failed to send to user %s: %s",
+                    user_id,
+                    e,
+                )
+                error_count += 1
+
+            await asyncio.sleep(1 / 30)
+
+        logger.info(
+            "[GOVERNANCE] Alert sent | proposal_id: %s | recipients: %s | errors: %s",
+            alert.proposal_id,
+            ok_count,
+            error_count,
+        )
 
     async def _send_to_user(self, bot, user_id: int, text: str, keyboard) -> bool:
         """Send digest to one user. Handle Forbidden, RetryAfter; retry once on RetryAfter.

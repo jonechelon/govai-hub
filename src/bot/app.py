@@ -33,6 +33,7 @@ from src.bot.handlers import (
     free_text_handler,
     help_handler,
     inline_handler,
+    governance_handler,
     premium_handler,
     settings_handler,
     setwallet_handler,
@@ -82,6 +83,9 @@ async def on_startup(application: Application) -> None:
     await db.downgrade_expired_users()
     await scheduler.start(application, db=db)
 
+    # Start governance poller AFTER scheduler.start()
+    scheduler.start_governance_poller(application.bot)
+
     startup_time = datetime.now(timezone.utc)
     application.bot_data["uptime_start"] = startup_time
 
@@ -106,6 +110,12 @@ async def on_shutdown(application: Application) -> None:
     if checker:
         checker.stop()
     cache_manager.stop()
+
+    # Remove governance poller job first, if present
+    if scheduler.scheduler.get_job("governance_poller"):
+        scheduler.scheduler.remove_job("governance_poller")
+        logger.info("[SHUTDOWN] Governance poller stopped")
+
     await scheduler.shutdown()
     logger.info("[SHUTDOWN] Bot stopped gracefully")
 
@@ -149,6 +159,7 @@ def build_application() -> Application:
     application.add_handler(unsubscribe_handler)
     application.add_handler(ask_handler)
     application.add_handler(stop_handler)
+    application.add_handler(governance_handler)
 
     # Admin-only commands (ADMIN_CHAT_ID)
     application.add_handler(CommandHandler("admin_stats", admin_stats_handler))

@@ -28,8 +28,14 @@ from web3 import Web3
 
 from src.ai.digest_generator import digest_generator
 from src.ai.groq_client import groq_client
-from src.bot.keyboards import get_digest_keyboard, get_main_keyboard, get_premium_keyboard, get_settings_keyboard
-from src.database.manager import db
+from src.bot.keyboards import (
+    get_digest_keyboard,
+    get_main_keyboard,
+    get_premium_keyboard,
+    get_settings_keyboard,
+)
+from src.database.manager import DatabaseManager, db
+from src.database.models import GovernanceAlert
 from src.fetchers.fetcher_manager import fetcher_manager
 from src.utils.config_loader import CONFIG
 from src.utils.env_validator import get_env_or_fail
@@ -57,6 +63,66 @@ MIN_CONFIRMATIONS = 3
 logger = logging.getLogger(__name__)
 
 _TX_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+
+
+# ── Governance helpers ──────────────────────────────────────────────────────────
+
+
+def _format_relative_time(dt: datetime) -> str:
+    """Return human-readable relative time (e.g. '2h ago')."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    delta = now - dt
+
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "just now"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        return f"{minutes}m ago"
+    elif seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours}h ago"
+    else:
+        days = seconds // 86400
+        return f"{days} days ago"
+
+
+def _shorten_address(address: str) -> str:
+    """Shorten a 0x address to 0x1234...abcd format."""
+    if len(address) < 10:
+        return address
+    return f"{address[:6]}...{address[-4:]}"
+
+
+def _format_governance_list(alerts: list[GovernanceAlert]) -> str:
+    """Format a list of governance alerts for the /governance command."""
+    if not alerts:
+        return (
+            "🏛️ *Celo Governance*\n\n"
+            "No governance proposals found yet\\.\n\n"
+            "Alerts are sent automatically when new proposals appear\\."
+        )
+
+    lines = ["🏛️ *Recent Celo Governance*\n"]
+    for alert in alerts:
+        proposer_short = _shorten_address(alert.proposer)
+        queued_relative = _format_relative_time(alert.queued_at)
+        celoscan_url = f"https://celoscan.io/tx/{alert.tx_hash}"
+
+        lines.append(
+            f"📋 *\\#{alert.proposal_id}* — Queued {queued_relative}\n"
+            f"👤 Proposer: `{proposer_short}`\n"
+            f"[🔗 CeloScan]({celoscan_url}) · "
+            "[📋 Forum](https://forum.celo.org/c/governance)\n"
+        )
+
+    lines.append(
+        "\n_→ Alerts are sent automatically when new proposals appear\\._"
+    )
+    return "\n".join(lines)
 
 
 # ── Admin guard ───────────────────────────────────────────────────────────────
@@ -649,7 +715,7 @@ async def digest_command_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     # Step 2 — Loading indicator
-    loading_msg = await update.message.reply_text("⏳ Fetching your personalized digest...")
+    loading_msg = await update.message.reply_text("⏳ Generating your Celo digest...")
     logger.info("[DIGEST] Starting manual request for user %s", user_id)
 
     # Step 3 — Cache check (snapshot TTL: 30 min)
@@ -975,6 +1041,22 @@ async def stop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+async def governance_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /governance command — show recent governance proposals."""
+    db_manager = DatabaseManager()
+    alerts = await db_manager.get_recent_alerts(limit=5)
+
+    text = _format_governance_list(alerts)
+
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN_V2,
+        disable_web_page_preview=True,
+    )
+
+
 # ── Admin commands (ADMIN_CHAT_ID only) ────────────────────────────────────────
 
 @admin_only
@@ -1192,3 +1274,4 @@ stop_handler = CommandHandler("stop", stop_handler)
 subscribe_handler = CommandHandler("subscribe", subscribe_handler)
 unsubscribe_handler = CommandHandler("unsubscribe", unsubscribe_handler)
 inline_handler = InlineQueryHandler(inline_query_handler)
+governance_handler = CommandHandler("governance", governance_handler)

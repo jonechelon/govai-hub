@@ -1,0 +1,10 @@
+{
+  "status": "healthy",
+  "uptime_seconds": 59,
+  "last_digest_at": null,
+  "subscribers_count": 1,
+  "premium_count": 0,
+  "last_fetch_at": null,
+  "groq_status": "ok",
+  "checked_at": "2026-03-17T23:09:14.374319+00:00"
+}

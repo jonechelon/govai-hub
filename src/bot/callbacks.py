@@ -115,6 +115,8 @@ async def _handle_digest_latest(
     callback_data = query.data or ""
     logger.info("[CALLBACK] _handle_digest_latest | data=%s | user=%d", callback_data, user_id)
 
+    loading_msg = await query.message.reply_text("⏳ Generating your Celo digest...")
+
     try:
         user_apps = await db.get_user_apps_by_category(user_id)
         logger.debug(
@@ -129,6 +131,10 @@ async def _handle_digest_latest(
             exc,
             exc_info=True,
         )
+        try:
+            await loading_msg.edit_text("❌ Failed to load digest. Try again.")
+        except Exception:  # noqa: BLE001
+            pass
         await query.answer("Error loading digest", show_alert=True)
         return
 
@@ -144,6 +150,10 @@ async def _handle_digest_latest(
             exc,
             exc_info=True,
         )
+        try:
+            await loading_msg.edit_text("❌ Failed to load digest. Try again.")
+        except Exception:  # noqa: BLE001
+            pass
         await query.answer("Error loading digest", show_alert=True)
         return
 
@@ -156,11 +166,15 @@ async def _handle_digest_latest(
             user_id,
             list(result.keys()),
         )
+        try:
+            await loading_msg.edit_text("❌ Failed to load digest. Try again.")
+        except Exception:  # noqa: BLE001
+            pass
         await query.answer("Error loading digest", show_alert=True)
         return
 
     try:
-        await query.message.edit_text(
+        await loading_msg.edit_text(
             text=text,
             reply_markup=get_digest_keyboard(digest_id),
             parse_mode=ParseMode.HTML,
@@ -172,7 +186,7 @@ async def _handle_digest_latest(
             exc,
         )
         try:
-            await query.message.edit_text(
+            await loading_msg.edit_text(
                 text=text[:4000],
                 reply_markup=get_digest_keyboard(digest_id),
             )
@@ -192,6 +206,10 @@ async def _handle_digest_latest(
             exc,
             exc_info=True,
         )
+        try:
+            await loading_msg.edit_text("❌ Failed to load digest. Try again.")
+        except Exception:  # noqa: BLE001
+            pass
         await query.answer("Error loading digest", show_alert=True)
         return
 

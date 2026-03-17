@@ -32,6 +32,7 @@ text
 ## Key Features
 
 - 📰 **Daily AI digest** — news, DeFi, ReFi, governance & on-chain data
+- 🏛️ **Governance alerts** — real-time Celo governance proposals (`/governance`)
 - 🤖 **Conversational agent** — `/ask` anything about the Celo ecosystem
 - ⚙️ **Personalization** — choose which apps and categories to follow
 - ⭐ **Premium plan** — paid in CELO on Celo Mainnet
@@ -72,7 +73,7 @@ text
 - 🔜 Up-to-Celo for Discord
 - 🔜 AI-generated price charts in /ask
 - 🔜 Celo wallet portfolio tracker
-- 🔜 Governance proposal push alerts
+- ✅ Governance proposal push alerts (15min polling + /governance)
 - 🔜 Multi-language support (PT · ES · FR · ZH)
 - 🔜 Agent-to-agent (A2A) communication
 - 🔜 Webhook-based real-time event triggers
@@ -85,6 +86,9 @@ cd up-to-celo
 cp .env.example .env   # fill in keys — see .env.example
 pip install -r requirements.txt
 python -m src.bot.app
+Test governance alerts:
+python scripts/test_governance.py
+/governance
 License
 MIT — open source, free to fork and build upon.
 
