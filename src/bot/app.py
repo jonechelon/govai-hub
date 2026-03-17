@@ -178,7 +178,7 @@ def build_application() -> Application:
 
 
 def main() -> None:
-    """Main entrypoint: validate environment, build application, and start polling."""
+    """Main entrypoint: validate environment, build application, and start webhook server."""
     # Step 1: logger already initialized on import (src.utils.logger)
 
     # Step 2: validate all required environment variables
@@ -231,7 +231,7 @@ def main() -> None:
         sys.exit(0)
 
     except Exception as exc:
-        # Step 9: any fatal error during startup or polling
+        # Step 9: any fatal error during startup or webhook operation
         logger.exception(f"[FATAL] Unhandled exception: {exc}")
         sys.exit(1)
 
