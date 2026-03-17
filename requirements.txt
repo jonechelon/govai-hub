@@ -1,5 +1,5 @@
 # Telegram Bot (Bot API — not userbot)
-python-telegram-bot==21.*
+python-telegram-bot[webhooks]==21.*
 
 # AI / LLM
 groq>=1.0.0
