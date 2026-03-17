@@ -1,15 +1,17 @@
 # src/utils/health_check.py
-# Background task that monitors bot health every 60 seconds.
-# Saves data/status.json and alerts admin after 2 consecutive unhealthy cycles.
-# Minimal aiohttp HTTP server for UptimeRobot (GET /health) to prevent
-# Render free tier worker from sleeping after 15min of inactivity (P40).
+# Background health monitor: checks DB + Groq every 60 s, writes data/status.json,
+# and alerts ADMIN_CHAT_ID after consecutive unhealthy cycles.
+#
+# The GET /health HTTP endpoint is registered in src/bot/app.py on the same
+# aiohttp server that receives Telegram webhook updates. Keeping both routes
+# on one server avoids port conflicts and removes the need for a separate
+# health server process. _health_handler is imported directly by app.py.
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,22 +22,27 @@ from src.utils.env_validator import get_env_or_fail
 
 logger = logging.getLogger(__name__)
 
-# Path to the status file consumed by the /health HTTP endpoint (P40)
+# Path to the status file written by HealthChecker._run_check()
 STATUS_FILE = Path("data/status.json")
 
-# --- UptimeRobot HTTP server (P40) ---
+# Module-level state updated by set_last_digest_at() (called from Notifier)
 _uptime_start = time.time()
 _last_digest_at: str | None = None
 
 
 def set_last_digest_at(ts: str) -> None:
-    """Call this from Notifier after each successful digest broadcast."""
+    """Record the timestamp of the last successful digest broadcast."""
     global _last_digest_at
     _last_digest_at = ts
 
 
 async def _health_handler(request: web.Request) -> web.Response:
-    """Return current bot health as JSON for UptimeRobot."""
+    """Return a JSON health snapshot for UptimeRobot / Render health check.
+
+    Registered by src.bot.app on the webhook aiohttp server at GET /health.
+    Always returns HTTP 200 so that UptimeRobot considers the bot alive as
+    long as the process is running; deeper subsystem health is in the payload.
+    """
     payload = {
         "status": "ok",
         "uptime": int(time.time() - _uptime_start),
@@ -47,36 +54,6 @@ async def _health_handler(request: web.Request) -> web.Response:
         content_type="application/json",
     )
 
-
-async def start_health_server() -> None:
-    """
-    Historical standalone aiohttp health server for GET /health.
-
-    In webhook mode this server MUST NOT bind to PORT because the PTB
-    webhook server already owns the same port. The /health endpoint is
-    now exposed by the webhook aiohttp application (see src.bot.app),
-    so this function is effectively disabled by default to avoid two
-    HTTP servers competing on port 8080.
-    """
-    if os.getenv("HEALTH_SERVER_DISABLED", "1") == "1":
-        # Standalone health server is disabled; /health is served by the
-        # PTB webhook aiohttp application instead to prevent port conflicts.
-        logger.info(
-            "[HEALTH] Standalone aiohttp health server disabled; "
-            "/health served by webhook app"
-        )
-        return
-
-    port = int(os.getenv("PORT", "8080"))
-    app = web.Application()
-    app.router.add_get("/health", _health_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("[HEALTH] Health server started on :%s — GET /health", port)
-    while True:
-        await asyncio.sleep(3600)
 
 # How many consecutive unhealthy cycles before alerting admin
 UNHEALTHY_THRESHOLD = 2

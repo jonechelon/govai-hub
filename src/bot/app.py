@@ -1,11 +1,13 @@
 # src/bot/app.py
-# Up-to-Celo — bot application factory and main entrypoint (P5)
+# Up-to-Celo — bot application factory and main entrypoint
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import sys
+from urllib.parse import urlparse
 
 from aiohttp import web
 
@@ -80,11 +82,6 @@ async def on_startup(application: Application) -> None:
     await db.downgrade_expired_users()
     await scheduler.start(application, db=db)
 
-    # Standalone aiohttp health server is disabled in webhook mode because the
-    # PTB webhook server already binds to the same PORT. The /health endpoint
-    # is now exposed by the webhook aiohttp application instead (see
-    # build_application()) to avoid running two HTTP servers on port 8080.
-
     startup_time = datetime.now(timezone.utc)
     application.bot_data["uptime_start"] = startup_time
 
@@ -119,12 +116,21 @@ def build_application() -> Application:
     Uses ApplicationBuilder with post_init / post_shutdown hooks.
     Registers all command and callback handlers. No business logic — wiring only.
 
+    The Updater is explicitly disabled (.updater(None)) because webhook HTTP
+    is handled by our own aiohttp server in run_bot(). PTB's built-in webhook
+    server (used by run_webhook()) owns its own aiohttp app and freezes routes
+    before we can inject /health — making it impossible to co-host both
+    endpoints on the same port without owning the server ourselves.
+
     Returns:
         Configured Application instance (not yet running).
     """
     application = (
         ApplicationBuilder()
         .token(get_env_or_fail("TELEGRAM_BOT_TOKEN"))
+        # Disable the built-in Updater: webhook HTTP is handled by our own
+        # aiohttp server below, so PTB's internal webhook server is not needed.
+        .updater(None)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
         .build()
@@ -163,26 +169,139 @@ def build_application() -> Application:
     # Global error handler — catches all unhandled exceptions and logs them
     application.add_error_handler(global_error_handler)
 
-    # Expose GET /health on the same aiohttp application used by the PTB
-    # webhook server so that UptimeRobot can monitor the bot without a
-    # separate aiohttp server binding to port 8080.
-    try:
-        application.web_app.add_routes([web.get("/health", _health_handler)])
-        logger.info("[HEALTH] /health endpoint registered on webhook server")
-    except Exception as exc:
+    return application
+
+
+async def run_bot() -> None:
+    """Run the bot using a self-managed aiohttp webhook server.
+
+    Why not Application.run_webhook()?
+    PTB's run_webhook() creates an internal aiohttp.web.Application whose routes
+    are frozen by AppRunner.setup() before we can inject additional endpoints.
+    There is no public hook between WebhookServer.__init__() (where web_app is
+    created) and WebhookServer.serve() (where freeze happens). Attempting to add
+    routes via application.web_app raises AttributeError; attempting it after
+    startup silently fails because the router is frozen.
+
+    By owning the aiohttp server we register both routes atomically before
+    setup(), which is the only correct place to do it:
+        POST  /{webhook_path}  — Telegram update receiver
+        GET   /health          — UptimeRobot / Render health check
+        GET   /                — Render connectivity probe (returns 200)
+
+    PTB's update_queue is used to hand off deserialized Update objects to the
+    Application's processing loop, started by application.start().
+
+    Lifecycle:
+        initialize() → start() → TCPSite.start() → await stop_event
+        → site.stop() → runner.cleanup() → stop() → shutdown()
+    """
+    port = int(os.getenv("PORT", "8080"))
+
+    # WEBHOOK_URL in render.yaml is the full URL including the path,
+    # e.g. "https://up-to-celo.onrender.com/telegram".
+    webhook_url = os.getenv("WEBHOOK_URL", "").rstrip("/")
+
+    # Derive the aiohttp route path from WEBHOOK_URL so the handler always
+    # matches what Telegram was told to POST to. Defaults to "/telegram".
+    parsed_path = urlparse(webhook_url).path
+    webhook_path = parsed_path if parsed_path and parsed_path != "/" else "/telegram"
+
+    application = build_application()
+
+    # Initialize PTB: sets up the bot object and triggers on_startup (post_init).
+    await application.initialize()
+
+    # Start the update-processing background task (consumes from update_queue).
+    await application.start()
+
+    # ------------------------------------------------------------------
+    # Build our own aiohttp server — we own every route on this server.
+    # ------------------------------------------------------------------
+    aio_app = web.Application()
+
+    async def telegram_update_handler(request: web.Request) -> web.Response:
+        """Receive a Telegram update, deserialize it, and push it to PTB."""
+        try:
+            data = await request.json()
+            update = Update.de_json(data, application.bot)
+            await application.update_queue.put(update)
+            logger.debug("[WEBHOOK] Update enqueued | update_id=%s", update.update_id)
+        except Exception as exc:
+            # Always return 200: a non-200 response causes Telegram to retry the
+            # same update endlessly, flooding the queue on malformed payloads.
+            logger.warning("[WEBHOOK] Failed to enqueue update: %s", exc)
+        return web.Response(status=200)
+
+    async def root_handler(request: web.Request) -> web.Response:
+        """Return 200 for Render's default connectivity probe on GET /."""
+        return web.Response(text="Up-to-Celo OK")
+
+    aio_app.router.add_post(webhook_path, telegram_update_handler)
+    aio_app.router.add_get("/health", _health_handler)
+    aio_app.router.add_get("/", root_handler)
+
+    # Register the webhook URL with Telegram (idempotent — safe on every restart).
+    if webhook_url:
+        await application.bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=list(Update.ALL_TYPES),
+        )
+        logger.info("[STARTUP] Webhook registered | url=%s", webhook_url)
+    else:
         logger.warning(
-            "[HEALTH] Failed to register /health route on webhook server: %s", exc
+            "[STARTUP] WEBHOOK_URL not set — Telegram updates will NOT arrive. "
+            "Set WEBHOOK_URL=https://<render-host>/telegram in environment vars."
         )
 
-    return application
+    # Start the HTTP server — all routes are registered before setup() freezes them.
+    runner = web.AppRunner(aio_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    logger.info(
+        "[STARTUP] Webhook server listening | port=%d | path=%s", port, webhook_path
+    )
+    logger.info("[STARTUP] Health endpoint ready | port=%d | path=/health", port)
+    logger.info("[STARTUP] Up-to-Celo bot started | version: 1.1 | mode: webhook")
+
+    # ------------------------------------------------------------------
+    # Block until SIGTERM or SIGINT is received (Render sends SIGTERM).
+    # ------------------------------------------------------------------
+    stop_event = asyncio.Event()
+
+    def _request_stop(*_args: object) -> None:
+        logger.info("[SHUTDOWN] Stop signal received — initiating graceful shutdown")
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            # asyncio signal handlers are non-blocking and safe on Linux (Render).
+            loop.add_signal_handler(sig, _request_stop)
+        except (NotImplementedError, RuntimeError):
+            # Fallback for Windows during local development.
+            signal.signal(sig, _request_stop)
+
+    await stop_event.wait()
+
+    # ------------------------------------------------------------------
+    # Graceful shutdown: HTTP server first, then PTB.
+    # ------------------------------------------------------------------
+    logger.info("[SHUTDOWN] Stopping aiohttp server...")
+    await site.stop()
+    await runner.cleanup()
+
+    logger.info("[SHUTDOWN] Stopping PTB application...")
+    await application.stop()
+    await application.shutdown()
 
 
 def main() -> None:
     """Main entrypoint: validate environment, build application, and start webhook server."""
-    # Step 1: logger already initialized on import (src.utils.logger)
-
-    # Step 2: validate all required environment variables
-    # Fails fast with descriptive error if any var is missing
+    # Fail fast with a descriptive error if any required var is missing.
     get_env_or_fail("TELEGRAM_BOT_TOKEN")
     get_env_or_fail("GROQ_API_KEY")
     get_env_or_fail("ADMIN_CHAT_ID")
@@ -190,7 +309,6 @@ def main() -> None:
     get_env_or_fail("BOT_WALLET_ADDRESS")
     get_env_or_fail("BOT_WALLET_PRIVATE_KEY")
 
-    # Step 3: confirm config loaded successfully
     bot_name = CONFIG.get("bot", {}).get("name", "Up-to-Celo")
     digest_time = CONFIG.get("digest_schedule", {}).get("time", "08:30")
     digest_tz = CONFIG.get("digest_schedule", {}).get("timezone", "Europe/Madrid")
@@ -198,40 +316,18 @@ def main() -> None:
         f"[CONFIG] Loaded | bot={bot_name} | digest={digest_time} {digest_tz}"
     )
 
-    # Step 4: handle SIGTERM gracefully (Render sends SIGTERM on worker stop)
-    def _handle_sigterm(signum, frame) -> None:
-        logger.info("[SHUTDOWN] SIGTERM received — stopping bot")
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, _handle_sigterm)
-
-    # Step 5 + 6: build app and log startup
     try:
-        application = build_application()
-        logger.info(
-            "[STARTUP] Up-to-Celo bot started | version: 1.1 | mode: webhook"
-        )
-
-        # Step 7: start webhook server — blocks until stopped
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.getenv("PORT", 10000)),
-            url_path="telegram",
-            webhook_url=os.getenv("WEBHOOK_URL"),
-            drop_pending_updates=True,
-        )
-
-        # Step 8: clean exit after run_webhook returns (e.g. KeyboardInterrupt handled internally)
+        asyncio.run(run_bot())
         logger.info("[SHUTDOWN] Webhook server stopped — exiting cleanly")
         sys.exit(0)
 
     except KeyboardInterrupt:
-        # Ctrl+C during local development
+        # Ctrl+C during local development — stop_event handles it via SIGINT handler,
+        # but asyncio.run() itself may raise KeyboardInterrupt on some platforms.
         logger.info("[SHUTDOWN] KeyboardInterrupt — exiting cleanly")
         sys.exit(0)
 
     except Exception as exc:
-        # Step 9: any fatal error during startup or webhook operation
         logger.exception(f"[FATAL] Unhandled exception: {exc}")
         sys.exit(1)
 
