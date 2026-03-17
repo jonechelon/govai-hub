@@ -24,6 +24,7 @@ from src.bot.keyboards import (
 )
 from src.database.manager import db
 from src.database.models import APPS_AVAILABLE
+from src.ai.digest_generator import digest_generator
 from src.utils.cache_manager import cache
 from src.utils.env_validator import get_env_or_fail
 
@@ -38,46 +39,66 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     data: str = query.data or ""
     user_id: int = update.effective_user.id
 
-    if data == "noop":
-        return  # silently ignore category header buttons
-    elif data == "digest:latest":
-        await _handle_digest_latest(query, context, user_id)
-    elif data.startswith("details:"):
-        _, digest_id = data.split(":", 1)
-        await _handle_details(query, context, digest_id)
-    elif data.startswith("links:"):
-        _, digest_id = data.split(":", 1)
-        await _handle_links(query, context, digest_id)
-    elif data.startswith("ask:"):
-        _, digest_id = data.split(":", 1)
-        await _handle_ask(query, context, user_id, digest_id)
-    elif data == "settings:open":
-        await _handle_settings_open(query, context, user_id)
-    elif data.startswith("settings:category:"):
-        cat_key = data.split(":", 2)[2]
-        await _handle_settings_category(query, context, user_id, cat_key)
-    elif data == "settings_close":
-        await _handle_settings_close(query)
-    elif data.startswith("toggle_app:"):
-        await _handle_toggle_app(query, user_id)
-    elif data == "premium:open":
-        await _handle_premium_open(query, context, user_id)
-    elif data == "premium:7d":
-        await _handle_premium_plan(query, user_id, days=7)
-    elif data == "premium:30d":
-        await _handle_premium_plan(query, user_id, days=30)
-    elif data == "premium:confirm":
-        await _handle_premium_confirm(query)
-    elif data == "premium:back":
-        await _handle_premium_back(query, user_id)
-    elif data.startswith("back:"):
-        await _handle_back(query, user_id)
-    elif data == "help:open":
-        await _handle_help_open(query)
-    elif data == "resubscribe":
-        await _handle_resubscribe(query, user_id)
-    else:
-        logger.warning("[CALLBACK] Unknown callback_data: %s from user %d", data, user_id)
+    logger.info("[CALLBACK] %s from user %d", data, user_id)
+
+    try:
+        if data == "noop":
+            return  # silently ignore category header buttons
+        elif data == "digest:latest":
+            await _handle_digest_latest(query, context, user_id)
+        elif data.startswith("details:"):
+            _, digest_id = data.split(":", 1)
+            await _handle_details(query, context, digest_id)
+        elif data.startswith("links:"):
+            _, digest_id = data.split(":", 1)
+            await _handle_links(query, context, digest_id)
+        elif data.startswith("ask:"):
+            _, digest_id = data.split(":", 1)
+            await _handle_ask(query, context, user_id, digest_id)
+        elif data == "settings:open":
+            await _handle_settings_open(query, context, user_id)
+        elif data.startswith("settings:category:"):
+            cat_key = data.split(":", 2)[2]
+            await _handle_settings_category(query, context, user_id, cat_key)
+        elif data == "settings_close":
+            await _handle_settings_close(query)
+        elif data.startswith("toggle_app:"):
+            await _handle_toggle_app(query, user_id)
+        elif data == "premium:open":
+            await _handle_premium_open(query, context, user_id)
+        elif data == "premium:7d":
+            await _handle_premium_plan(query, user_id, days=7)
+        elif data == "premium:30d":
+            await _handle_premium_plan(query, user_id, days=30)
+        elif data == "premium:confirm":
+            await _handle_premium_confirm(query)
+        elif data == "premium:back":
+            await _handle_premium_back(query, user_id)
+        elif data.startswith("back:"):
+            await _handle_back(query, user_id)
+        elif data == "help:open":
+            await _handle_help_open(query)
+        elif data == "resubscribe":
+            await _handle_resubscribe(query, user_id)
+        else:
+            logger.warning(
+                "[CALLBACK] Unknown callback_data: %s from user %d",
+                data,
+                user_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[CALLBACK] Error handling callback_data=%s for user=%d | error=%s",
+            data,
+            user_id,
+            exc,
+            exc_info=True,
+        )
+        try:
+            await query.answer("Error loading digest", show_alert=True)
+        except Exception:  # noqa: BLE001
+            # Best-effort: avoid raising inside the error handler itself.
+            pass
 
 
 # ── digest ────────────────────────────────────────────────────────────────────
@@ -85,10 +106,99 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def _handle_digest_latest(
     query, context: ContextTypes.DEFAULT_TYPE, user_id: int
 ) -> None:
-    """Stub until P22 — prompt user to use /digest."""
-    await query.answer(
-        "📰 Use /digest to get today's digest.",
-        show_alert=True,
+    """Generate and show the latest digest when user taps the main menu button.
+
+    Uses the same DigestGenerator pipeline as /digest, honoring the user's app
+    preferences. Any failure is surfaced as a short alert to the user and
+    logged with full traceback for debugging.
+    """
+    callback_data = query.data or ""
+    logger.info("[CALLBACK] _handle_digest_latest | data=%s | user=%d", callback_data, user_id)
+
+    try:
+        user_apps = await db.get_user_apps_by_category(user_id)
+        logger.debug(
+            "[DIGEST_CALLBACK] Loaded user apps for user=%d | categories=%d",
+            user_id,
+            len(user_apps),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[DIGEST_CALLBACK] Failed to load user apps | user=%d | error=%s",
+            user_id,
+            exc,
+            exc_info=True,
+        )
+        await query.answer("Error loading digest", show_alert=True)
+        return
+
+    try:
+        result = await digest_generator.generate_digest(
+            template="daily",
+            user_apps_by_category=user_apps,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[DIGEST_CALLBACK] Digest generation failed for user=%d | error=%s",
+            user_id,
+            exc,
+            exc_info=True,
+        )
+        await query.answer("Error loading digest", show_alert=True)
+        return
+
+    text = result.get("text") or ""
+    digest_id = result.get("digest_id")
+
+    if not text or not digest_id:
+        logger.error(
+            "[DIGEST_CALLBACK] Invalid digest result for user=%d | keys=%s",
+            user_id,
+            list(result.keys()),
+        )
+        await query.answer("Error loading digest", show_alert=True)
+        return
+
+    try:
+        await query.message.edit_text(
+            text=text,
+            reply_markup=get_digest_keyboard(digest_id),
+            parse_mode=ParseMode.HTML,
+        )
+    except BadRequest as exc:
+        logger.warning(
+            "[DIGEST_CALLBACK] BadRequest editing message for user=%d | error=%s",
+            user_id,
+            exc,
+        )
+        try:
+            await query.message.edit_text(
+                text=text[:4000],
+                reply_markup=get_digest_keyboard(digest_id),
+            )
+        except Exception as inner_exc:  # noqa: BLE001
+            logger.error(
+                "[DIGEST_CALLBACK] Fallback edit failed for user=%d | error=%s",
+                user_id,
+                inner_exc,
+                exc_info=True,
+            )
+            await query.answer("Error loading digest", show_alert=True)
+            return
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[DIGEST_CALLBACK] Unexpected error editing message for user=%d | error=%s",
+            user_id,
+            exc,
+            exc_info=True,
+        )
+        await query.answer("Error loading digest", show_alert=True)
+        return
+
+    logger.info(
+        "[DIGEST_CALLBACK] Digest loaded via main button | digest_id=%s | user=%d",
+        digest_id,
+        user_id,
     )
 
 
