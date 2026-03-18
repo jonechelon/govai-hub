@@ -33,7 +33,7 @@ from src.bot.handlers import (
     free_text_handler,
     help_handler,
     inline_handler,
-    governance_handler,
+    governance_command,
     premium_handler,
     settings_handler,
     setwallet_handler,
@@ -159,7 +159,7 @@ def build_application() -> Application:
     application.add_handler(unsubscribe_handler)
     application.add_handler(ask_handler)
     application.add_handler(stop_handler)
-    application.add_handler(governance_handler)
+    application.add_handler(governance_command)
 
     # Admin-only commands (ADMIN_CHAT_ID)
     application.add_handler(CommandHandler("admin_stats", admin_stats_handler))

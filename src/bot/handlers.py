@@ -1047,7 +1047,12 @@ async def governance_handler(
 
     text = _format_governance_list(alerts)
 
-    await update.message.reply_text(
+    message = update.effective_message
+    if message is None:
+        logger.error("[GOV] No effective_message to send governance reply")
+        return
+
+    await message.reply_text(
         text,
         parse_mode=ParseMode.MARKDOWN_V2,
         disable_web_page_preview=True,
@@ -1638,7 +1643,7 @@ stop_handler = CommandHandler("stop", stop_handler)
 subscribe_handler = CommandHandler("subscribe", subscribe_handler)
 unsubscribe_handler = CommandHandler("unsubscribe", unsubscribe_handler)
 inline_handler = InlineQueryHandler(inline_query_handler)
-governance_handler = CommandHandler("governance", governance_handler)
+governance_command = CommandHandler("governance", governance_handler)
 govstatus_handler = CommandHandler("govstatus", govstatus_handler)
 vote_handler = CommandHandler("vote", vote_command_handler)
 proposal_handler = CommandHandler("proposal", proposal_handler)

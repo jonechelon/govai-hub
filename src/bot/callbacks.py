@@ -18,7 +18,7 @@ from src.bot.handlers import (
     PLAN_7D_CUSD,
     PREMIUM_MESSAGE,
     WELCOME_MESSAGE,
-    governance_handler,
+    governance_handler as governance_logic,
 )
 from src.bot.keyboards import (
     CATEGORY_DISPLAY,
@@ -96,7 +96,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif data == "help:open":
             await _handle_help_open(query)
         elif data == "governance:open":
-            await governance_handler(update, context)
+            await governance_logic(update, context)
         elif data == "govlist":
             await _handle_govlist(query)
         elif data == "govhistory":
