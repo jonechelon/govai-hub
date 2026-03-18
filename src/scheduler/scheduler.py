@@ -1,5 +1,5 @@
 # src/scheduler/scheduler.py
-# Up-to-Celo — DigestScheduler (APScheduler AsyncIOScheduler, Europe/Madrid, P20)
+# Celo GovAI Hub — DigestScheduler (APScheduler AsyncIOScheduler, Europe/Madrid, P20)
 
 from __future__ import annotations
 
@@ -101,11 +101,12 @@ class DigestScheduler:
         )
 
         # Governance executor job — aggregates vote intents and executes majority votes on-chain.
-        # Runs every 30 minutes with max_instances=1 to avoid overlapping executions.
+        # Runs every 1 minute with max_instances=1 to avoid overlapping executions.
+        # FIXME: Revert to 30 minutes after testing
         self._scheduler.add_job(
             func=governance_executor.run,
             trigger="interval",
-            minutes=30,
+            minutes=1,
             id="governance_executor",
             replace_existing=True,
             max_instances=1,
@@ -123,7 +124,7 @@ class DigestScheduler:
             next_run,
         )
         logger.info("[SCHEDULER] Payment poller started | interval=60s")
-        logger.info("[SCHEDULER] Governance executor started | interval=30min")
+        logger.info("[SCHEDULER] Governance executor started | interval=1min")
 
     def start_governance_poller(self, bot: "Bot") -> None:
         """Start the governance polling job that runs every 15 minutes."""

@@ -57,10 +57,7 @@ if _raw_url:
 else:
     # Development fallback: local SQLite
     from src.utils.paths import DATA_DIR
-    SQLITE_PATH_NEW = DATA_DIR / "celo-govai-hub.db"
-    SQLITE_PATH_OLD = DATA_DIR / "up-to-celo.db"
-    # Compatibility: if the previous DB already exists locally, keep using it.
-    SQLITE_PATH = SQLITE_PATH_OLD if SQLITE_PATH_OLD.exists() else SQLITE_PATH_NEW
+    SQLITE_PATH = DATA_DIR / "up-to-celo.db"
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{SQLITE_PATH}",
         echo=False,
