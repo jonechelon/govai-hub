@@ -2,17 +2,18 @@
 
 **Be up-to-date on the Celo Blockchain.**
 
-> AI agent · Telegram · Daily digests · Built on Celo
+> AI agent · Telegram · Governance Hub · Built on Celo
 
 ---
 
 ## What is it?
 
-Celo GovAI Hub is an autonomous AI agent deployed on Telegram that monitors 
-the entire Celo ecosystem and delivers personalized daily digests to 
-subscribers. It observes on-chain and off-chain data, reasons with a 
-70B LLM, and acts — broadcasting digests, answering questions, and 
-processing cUSD payments on Celo Mainnet for premium features.
+**Celo GovAI Hub** is a mobile-first AI terminal designed for the Celo ecosystem. It delivers daily on-chain insights and allows you to participate in network governance with a single command (e.g., `/vote 47 YES/NO`—all while keeping your funds strictly non-custodial and secure through Celo's native `LockedGold` architecture.
+
+> 💡 **The UX Problem We Solve:**
+> The traditional Web3 governance funnel is broken. Over 70% of users drop off between discovering a proposal, opening a dApp, connecting a wallet, and finally signing an on-chain transaction. 
+>
+> **With Celo GovAI Hub**, once `LockedGold` delegation is in place, governance becomes a frictionless, mobile-native interaction. You vote directly from Telegram using a single, fast command: `/vote <id> YES|NO|ABSTAIN` (e.g., `/vote 47 YES`).
 
 **Try it:** [@CeloGovAI_bot](https://t.me/UpToCeloBot)
 
@@ -20,25 +21,33 @@ processing cUSD payments on Celo Mainnet for premium features.
 
 ## Agent Loop
 
-OBSERVE REASON ACT
-────────────────── ─────────────── ──────────────────
-Celo RPC (blocks) → → Daily digest (08:30 UTC)
-CoinGecko (prices) → llama-3.3-70b → /ask responses
-DeFi Llama (TVL) → via Groq API → CELO payment processing
-RSS (15+ feeds) → → Admin health alerts
-Twitter/X (10 accs) →
-
-text
+```text
+[ Data Sources ]
+├─ Celo RPC (Blocks, Governance state, TVL)
+├─ CoinGecko / DeFi Llama (Market data)
+├─ RSS Feeds (15+ ecosystem sources)
+└─ Twitter/X (10+ ecosystem accounts)
+         │
+         ▼
+[ AI Processing ]
+└─ Groq API (llama-3.3-70b-versatile)
+         │
+         ▼
+[ Execution & Output ]
+├─ Telegram UI (Daily digests, /ask, Gov Hub)
+├─ PostgreSQL (State & Delegation tracking)
+└─ Celo Mainnet (On-chain voting via LockedGold)
+```
 
 ## Key Features
 
-- 📰 **Daily AI digest** — news, DeFi, ReFi, governance & on-chain data
-- 🏛️ **Governance alerts** — real-time Celo governance proposals (`/governance`)
-- 🤖 **Conversational agent** — `/ask` anything about the Celo ecosystem
-- ⚙️ **Personalization** — choose which apps and categories to follow
-- ⭐ **Premium plan** — paid in cUSD on Celo Mainnet
-- 🔗 **ERC-8004** — registered as on-chain agent
-- 🩺 **Self-monitoring** — health checker with admin Telegram alerts
+- 🏛️ **Governance Hub** — Real-time Celo governance integration. Includes `/govlist` for active proposals, `/govhistory` for past decisions, AI-powered ELI5 summaries (`/proposal`), and 1-click on-chain voting (`/vote`).
+- 🤖 **Conversational Agent** — Use `/ask` to chat with an AI that knows the Celo ecosystem inside out.
+- 📰 **Daily AI Digest** — Personalized daily news, DeFi/ReFi updates, and on-chain data.
+- ⭐ **Premium Plan (cUSD)** — Access advanced features with frictionless stablecoin payments on Celo Mainnet.
+- ⚙️ **Personalization** — Choose exactly which apps and categories you want to follow.
+- 🔗 **ERC-8004** — Registered as an on-chain agent.
+- 🩺 **Self-Monitoring** — Built-in health checker with admin Telegram alerts.
 
 ## Mobile-First Governance
 
@@ -51,32 +60,15 @@ delegated to validator groups or voting entities. Celo GovAI Hub implements a "p
 model: users keep their CELO in their own self-custodial wallet, sign a one-time delegation
 transaction, and the Gov Hub agent uses that delegated voting power to cast votes on their behalf.
 
-This flow removes the traditional UX funnel where more than 70% of users drop off between
-discovering a proposal, opening a dApp, connecting a wallet, and finally signing an on-chain
-transaction. With Celo GovAI Hub, once the delegation is in place, governance becomes a simple,
-mobile-native interaction. Users can vote directly from Telegram with commands such as
-`/vote 123 YES`, while the backend translates that intent into an on-chain vote using the
-existing Celo governance primitives.
-
 The result is a governance experience that feels like chatting with an assistant, while still
 respecting the underlying `LockedGold` delegation model and the security assumptions of the Celo
 network.
 
-## Real World Monetization (cUSD)
-
-Celo GovAI Hub started with premium payments priced in native CELO. As the product matured, the
-monetization model was migrated to the Celo stablecoin cUSD to better align with real world
-economics and user expectations.
-
-cUSD is a stable asset designed to track the value of the US dollar on Celo. By charging for
-premium features in cUSD instead of volatile CELO, the agent offers predictable pricing to users,
-reduces revenue volatility for the operator, and makes it easier to reason about the cost of
-subscription tiers over time.
-
-This transition directly supports the "Real World Agents" theme of the Celo hackathon: the bot
-accepts payments in a stable currency that can be used for everyday transactions, while still
-settling on Celo Mainnet. Users pay for governance automation, AI digests, and advanced features
-in a currency that closely matches the value they perceive off-chain.
+To completely align with real-world economics, the Hub's premium features are monetized
+exclusively through **cUSD** (Celo Dollar). By charging in a stablecoin rather than a volatile
+asset, the agent offers predictable pricing for users and supports the "Real World Agents"
+narrative, proving that automated governance and AI digests can be seamlessly powered by everyday
+digital currency.
 
 ## Security Architecture
 
