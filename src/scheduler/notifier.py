@@ -79,7 +79,9 @@ def _build_governance_keyboard(tx_hash: str) -> InlineKeyboardMarkup:
 def _build_governance_message(alert: GovernanceAlert, ai_summary: str | None = None) -> str:
     """Build the Markdown message text for a governance alert."""
     proposer_short = _shorten_address(alert.proposer)
-    deposit_str = f"{alert.deposit_celo:.1f}" if alert.deposit_celo is not None else "N/A"
+    deposit_str = (
+        f"{float(alert.deposit_cusd):.1f}" if alert.deposit_cusd is not None else "N/A"
+    )
     queued_relative = _format_relative_time(alert.queued_at)
     safe_url = (
         escape_markdown(alert.description_url, version=2)
@@ -99,7 +101,7 @@ def _build_governance_message(alert: GovernanceAlert, ai_summary: str | None = N
         "🏛️ *New Celo Governance Proposal*\n\n"
         f"📋 *Proposal \\#{alert.proposal_id}*\n"
         f"👤 Proposer: `{proposer_short}`\n"
-        f"💰 Deposit: {deposit_str} CELO\n"
+        f"💰 Deposit: {deposit_str} cUSD\n"
         f"🕐 Queued: {queued_relative}\n\n"
         f"🔗 Description: {description}\n"
         f"{ai_block}\n\n"

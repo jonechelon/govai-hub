@@ -209,7 +209,7 @@ PREMIUM_MESSAGE = (
     "Send cUSD stablecoin to:\n"
     "{BOT_WALLET}\n\n"
     "Send from a personal wallet (MiniPay, Valora, MetaMask).\n"
-    "Important: you must send the cUSD stablecoin (not CELO) to the bot wallet above.\n"
+    "Important: you must send the cUSD stablecoin (not the native token) to the bot wallet above.\n"
     "Exchanges use intermediate addresses and won't be detected.\n\n"
     "After sending, tap the button below or use:\n"
     "/confirmpayment [tx_hash]"
@@ -408,7 +408,7 @@ async def premium_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"3. Premium activates in ~60s automatically\n\n"
         f"MANUAL (exchange withdrawal):\n"
         f"Send cUSD, then: /confirmpayment 0xTxHash\n\n"
-        f"Important: you must send the cUSD stablecoin (not CELO) to the bot wallet above.\n\n"
+        f"Important: you must send the cUSD stablecoin (not the native token) to the bot wallet above.\n\n"
         f"{wallet_line}",
         reply_markup=get_premium_keyboard(),
     )
@@ -417,13 +417,13 @@ async def premium_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ── /setwallet ─────────────────────────────────────────────────────────────────
 
 async def setwallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /setwallet <address> — register a personal wallet for automatic payment detection."""
+    """Handle /setwallet <address> — register wallets for Premium and governance checks."""
     user_id = update.effective_user.id
     args = context.args or []
 
     if not args:
         await update.message.reply_text(
-            "Register your personal wallet to enable automatic Premium detection.\n\n"
+            "Register your wallet to enable Premium auto-activation and governance delegation checks.\n\n"
             "Usage:\n"
             "/setwallet 0xYourWalletAddress\n\n"
             "Important: use a personal wallet (MiniPay, Valora, MetaMask).\n"
@@ -445,6 +445,7 @@ async def setwallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await db.get_or_create_user(user_id, update.effective_user.username, update.effective_user.first_name)
     await db.set_wallet(user_id, wallet)
+    await db.set_user_wallet(user_id, wallet)
     logger.info("[WALLET] Wallet registered | user=%s | wallet=%s", user_id, wallet)
 
     bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
@@ -453,8 +454,10 @@ async def setwallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"{wallet}\n\n"
         f"Now send {PLAN_7D_CUSD:.1f} cUSD (7-day) or {PLAN_30D_CUSD:.1f} cUSD (30-day) to:\n"
         f"{bot_wallet}\n\n"
-        f"Always send the cUSD stablecoin (not CELO) from a personal wallet.\n"
-        f"Premium will activate automatically within ~60 seconds after on-chain confirmation."
+        f"Always send the cUSD stablecoin (not the native token) from a personal wallet.\n"
+        f"Premium will activate automatically within ~60 seconds after on-chain confirmation.\n\n"
+        "Governance: after you delegate LockedGold voting power to the bot wallet, "
+        "run /govstatus to confirm the delegation on-chain."
     )
 
 
@@ -1078,8 +1081,8 @@ async def govlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = (
         "🏛️ <b>Celo Governance — Active Proposals</b>\n\n"
         f"⏳ <b>Queued:</b> {queued_str}\n"
-        f"🗳️ <b>Active Voting:</b> {active_str}\n"
-        "\n<i>Use <code>/proposal &lt;id&gt;</code> to read an AI summary and "
+        f"🗳️ <b>Active Voting:</b> {active_str}\n\n"
+        "<i>Use <code>/proposal &lt;id&gt;</code> to read an AI summary and "
         "<code>/vote &lt;id&gt;</code> to cast your vote.</i>"
     )
 
@@ -1140,9 +1143,8 @@ async def proposal_handler(
     alert = await db_manager.get_alert_by_id(proposal_id)
     description_url: str | None = alert.description_url if alert else None
 
-    # Step 2 — on-chain fallback when the DB has no record or no URL
-    if not description_url:
-        source_label = "on-chain" if alert is None else "on-chain (no URL in DB)"
+    # Step 2 — on-chain fallback ONLY when the proposal is not in local DB.
+    if alert is None:
         loading_msg = await update.message.reply_text(
             f"⏳ Proposal #{proposal_id} not in local cache — querying Celo network..."
         )
@@ -1154,23 +1156,29 @@ async def proposal_handler(
 
         if not description_url:
             await loading_msg.edit_text(
-                f"❌ Proposal #{proposal_id} not found on the Celo network.\n\n"
-                "The proposal ID may be incorrect, or the proposal may not exist yet.\n"
-                "Use /governance to list recent proposals."
+                f"❌ Proposal #{proposal_id} not found on the Celo network."
             )
             logger.info(
-                "[GOV] On-chain fallback returned nothing | proposal_id=%s", proposal_id
+                "[GOV] On-chain fallback returned nothing | proposal_id=%s",
+                proposal_id,
             )
             return
 
         logger.info(
-            "[GOV] On-chain fallback resolved URL | proposal_id=%s | source=%s | url=%s",
+            "[GOV] On-chain fallback resolved URL | proposal_id=%s | url=%s",
             proposal_id,
-            source_label,
             description_url,
         )
+        # Ensure we always show the AI processing state while we extract + summarize.
+        await _safe_edit(loading_msg, "⏳ Analyzing proposal...")
     else:
-        # DB hit — send loading indicator now (was not sent during the fallback path)
+        # DB hit — if the DB record exists but the URL is missing, treat it as not found.
+        if not description_url:
+            await update.message.reply_text(
+                f"❌ Proposal #{proposal_id} not found on the Celo network."
+            )
+            return
+
         loading_msg = await update.message.reply_text("⏳ Analyzing proposal...")
 
     # Common path — extract text and generate AI summary
@@ -1230,25 +1238,30 @@ async def delegate_handler(
     bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
 
     message = (
-        "🗳️ Delegation — Safe & Self-Custodial\n\n"
-        "With delegation, you allow Up-to-Celo to cast Celo governance votes on your behalf "
-        "while you keep 100% custody of your CELO. The bot never asks for private keys and "
-        "never signs transactions for you. All signing happens in your own wallet.\n\n"
-        "How to delegate your voting power (self-custodial):\n"
-        "1. Open an official Celo tool such as CeloScan, the Celo CLI, or a trusted "
-        "governance dApp.\n"
-        "2. Connect your self-custodial wallet that holds your locked CELO.\n"
-        "3. Navigate to the `LockedGold` contract interface.\n"
-        "4. Find the `delegate(address)` function.\n"
-        f"5. In the `delegate` input field, paste this agent address:\n   {bot_wallet}\n"
-        "6. Review the transaction details carefully.\n"
-        "7. Sign and send the transaction from your own wallet.\n\n"
-        "Once the transaction is confirmed on-chain, Up-to-Celo can use your delegated "
-        "voting power to vote on Celo governance proposals according to your preferences. "
-        "You remain in full control and can revoke this delegation at any time using /revoke."
+        "🗳️ <b>Delegation (Safe & Self-Custodial)</b>\n\n"
+        "<b>The bot votes for you</b>, but <b>you keep 100% control of your funds</b> "
+        "(<b>Zero Private Keys</b>).\n\n"
+        "<b>Security promise:</b>\n"
+        "• The bot never asks for your private keys.\n"
+        "• The bot never signs transactions for you.\n"
+        "• You sign in <i>your own wallet</i>, on-chain.\n\n"
+        "<b>Step-by-step: delegate your voting power via LockedGold</b>\n\n"
+        "1) Open an official Celo tool (for example: <b>CeloScan</b>, <b>Celo CLI</b>, or "
+        "a trusted Celo governance dApp).\n"
+        "2) Connect your self-custodial wallet that holds your locked CELO.\n"
+        "3) Go to the <code>LockedGold</code> contract interface.\n"
+        f"   Contract: <code>{LOCKED_GOLD_ADDRESS}</code>\n"
+        "4) Find the function <code>delegate(address)</code>.\n"
+        "5) In <code>delegate(address)</code>, paste the bot address as <code>address</code>:\n"
+        f"   <code>{bot_wallet}</code>\n"
+        "6) Review the transaction details carefully.\n"
+        "7) Sign and submit the transaction from your own wallet.\n\n"
+        "After the transaction is confirmed on-chain, Up-to-Celo can use your delegated "
+        "voting power to vote on Celo governance proposals based on your on-Telegram "
+        "vote intents. You can revoke at any time with <code>/revoke</code>."
     )
 
-    await update.message.reply_text(message)
+    await _safe_reply(update.message, message)
 
 
 async def revoke_handler(
@@ -1258,29 +1271,30 @@ async def revoke_handler(
     bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
 
     message = (
-        "⏪ Revoking Delegation — Full Control\n\n"
-        "You can stop Up-to-Celo from voting with your delegated power at any time. "
-        "Revoking delegation does not unlock your CELO and does not move your funds — "
-        "it only changes who can vote with your locked voting power.\n\n"
-        "How to revoke or change your delegation:\n"
-        "1. Open an official Celo tool such as CeloScan, the Celo CLI, or a trusted "
-        "governance dApp.\n"
-        "2. Connect the same self-custodial wallet you used for the original delegation.\n"
-        "3. Navigate to the `LockedGold` contract interface.\n"
-        "4. Option A — Delegate back to yourself:\n"
-        "   - Call `delegate(address)` again, but this time use your own wallet address as "
-        "the `address` parameter.\n"
-        "5. Option B — Use a revoke function (when exposed by the interface):\n"
-        "   - Call the specific revocation method provided for `LockedGold` delegations "
-        "(for example, a `revokeDelegation` or similar function), following the tool's "
-        "instructions.\n"
-        "6. Review the transaction details and sign it from your own wallet.\n\n"
-        "After the transaction is confirmed on-chain, Up-to-Celo will no longer be able "
-        "to vote using your delegated voting power. You can always delegate again to this "
-        f"agent address if you change your mind:\n   {bot_wallet}"
+        "⏪ <b>Revoking Delegation (Full Control)</b>\n\n"
+        "You can stop Up-to-Celo from voting with your delegated voting power at any time. "
+        "<b>Revoking does not unlock or move your CELO</b> — it only changes who can vote "
+        "with your locked voting power.\n\n"
+        "<b>Step-by-step: revoke / change delegation on LockedGold</b>\n\n"
+        "1) Open an official Celo tool (for example: <b>CeloScan</b>, <b>Celo CLI</b>, or "
+        "a trusted Celo governance dApp).\n"
+        "2) Connect the <i>same</i> self-custodial wallet you used for delegation.\n"
+        "3) Go to the <code>LockedGold</code> contract interface.\n"
+        f"   Contract: <code>{LOCKED_GOLD_ADDRESS}</code>\n"
+        "4) Choose one option:\n"
+        "   <b>Option A — Delegate back to yourself</b>\n"
+        "   • Call <code>delegate(address)</code> again, but set <code>address</code> to "
+        "your own wallet address.\n"
+        "   <b>Option B — Use a dedicated revoke function (if available in the UI)</b>\n"
+        "   • If the interface exposes a specific revocation method for LockedGold "
+        "delegations, use it following the tool's instructions.\n"
+        "5) Review the transaction details and sign it from your own wallet.\n\n"
+        "After the transaction is confirmed on-chain, Up-to-Celo will no longer be able to "
+        "vote using your previously delegated voting power. If you change your mind, you "
+        f"can delegate again to:\n<code>{bot_wallet}</code>\nusing <code>/delegate</code>."
     )
 
-    await update.message.reply_text(message)
+    await _safe_reply(update.message, message)
 
 
 # ── Admin commands (ADMIN_CHAT_ID only) ────────────────────────────────────────

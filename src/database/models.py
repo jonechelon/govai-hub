@@ -9,16 +9,17 @@ import os
 import re
 import ssl
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -56,7 +57,10 @@ if _raw_url:
 else:
     # Development fallback: local SQLite
     from src.utils.paths import DATA_DIR
-    SQLITE_PATH = DATA_DIR / "up-to-celo.db"
+    SQLITE_PATH_NEW = DATA_DIR / "celo-govai-hub.db"
+    SQLITE_PATH_OLD = DATA_DIR / "up-to-celo.db"
+    # Compatibility: if the previous DB already exists locally, keep using it.
+    SQLITE_PATH = SQLITE_PATH_OLD if SQLITE_PATH_OLD.exists() else SQLITE_PATH_NEW
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{SQLITE_PATH}",
         echo=False,
@@ -221,7 +225,10 @@ class GovernanceAlert(Base):
     proposal_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     proposer: Mapped[str] = mapped_column(String(42), nullable=False)
     description_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    deposit_celo: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    deposit_cusd: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(precision=36, scale=18),
+        nullable=True,
+    )
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tx_hash: Mapped[str] = mapped_column(String(66), nullable=False, unique=True)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -9,11 +9,16 @@ from src.utils.logger import logger
 
 
 FALLBACK_TEXT = "Description text unavailable. Please visit the URL for details."
+# Hard limit to protect LLM context windows (see P54).
 MAX_TEXT_LENGTH = 8000
 
 
-def _normalize_github_url(url: str) -> str:
-    """Convert GitHub blob URLs to raw URLs when possible."""
+def _to_github_raw_url(url: str) -> str:
+    """Convert GitHub blob URLs to raw URLs when possible.
+
+    This avoids downloading the GitHub HTML UI (CSS/JS-heavy) and fetches the
+    underlying file content instead.
+    """
     try:
         parsed = urlparse(url)
     except Exception:
@@ -22,29 +27,31 @@ def _normalize_github_url(url: str) -> str:
     host = (parsed.netloc or "").lower()
     path = parsed.path or ""
 
-    if host != "github.com":
+    if host not in {"github.com", "www.github.com"}:
         return url
 
     parts = [p for p in path.split("/") if p]
     # Expected: /{owner}/{repo}/blob/{ref}/{path...}
-    if len(parts) < 5 or parts[2] != "blob":
+    # We look for the first "blob" segment to be resilient to extra segments.
+    try:
+        blob_idx = parts.index("blob")
+    except ValueError:
         return url
 
-    owner, repo, _, ref = parts[0], parts[1], parts[2], parts[3]
-    remaining_path = "/".join(parts[4:])
-    raw_path = f"/{owner}/{repo}/{ref}/{remaining_path}"
+    # Need at least: owner, repo, blob, ref, file_path...
+    if blob_idx < 2 or blob_idx + 2 >= len(parts):
+        return url
 
-    normalized = urlunparse(
-        (
-            parsed.scheme or "https",
-            "raw.githubusercontent.com",
-            raw_path,
-            "",
-            "",
-            "",
-        )
-    )
-    return normalized
+    owner = parts[0]
+    repo = parts[1]
+    ref = parts[blob_idx + 1]
+    remaining_path = "/".join(parts[blob_idx + 2 :])
+    if not remaining_path:
+        return url
+
+    scheme = parsed.scheme or "https"
+    raw_url = f"{scheme}://raw.githubusercontent.com/{owner}/{repo}/{ref}/{remaining_path}"
+    return raw_url
 
 
 def _is_github_raw_url(url: str) -> bool:
@@ -80,10 +87,10 @@ def extract_proposal_text(url: str) -> str:
         logger.warning("[TEXT_EXTRACTOR] Empty URL received for proposal text extraction")
         return FALLBACK_TEXT
 
-    normalized_url = _normalize_github_url(url)
+    normalized_url = _to_github_raw_url(url)
     if normalized_url != url:
         logger.info(
-            "[TEXT_EXTRACTOR] Normalized GitHub blob URL to raw content URL | from=%s | to=%s",
+            "[TEXT_EXTRACTOR] Converted GitHub blob URL to raw content URL | from=%s | to=%s",
             url,
             normalized_url,
         )
@@ -100,7 +107,7 @@ def extract_proposal_text(url: str) -> str:
         return FALLBACK_TEXT
 
     raw_text = response.text or ""
-    if not raw_text:
+    if not raw_text.strip():
         cleaned_text = ""
     elif _is_github_raw_url(normalized_url):
         cleaned_text = raw_text.strip()

@@ -105,8 +105,7 @@ class DigestScheduler:
         self._scheduler.add_job(
             func=governance_executor.run,
             trigger="interval",
-            # FIXME: Revert to 30 minutes after testing
-            minutes=1,
+            minutes=30,
             id="governance_executor",
             replace_existing=True,
             max_instances=1,
@@ -124,7 +123,7 @@ class DigestScheduler:
             next_run,
         )
         logger.info("[SCHEDULER] Payment poller started | interval=60s")
-        logger.info("[SCHEDULER] Governance executor started | interval=1min")
+        logger.info("[SCHEDULER] Governance executor started | interval=30min")
 
     def start_governance_poller(self, bot: "Bot") -> None:
         """Start the governance polling job that runs every 15 minutes."""

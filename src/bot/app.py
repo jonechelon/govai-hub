@@ -29,6 +29,11 @@ from src.bot.handlers import (
     admin_digest_now_handler,
     ask_handler,
     confirm_payment_handler,
+    delegate_handler,
+    revoke_handler,
+    govstatus_handler,
+    govlist_handler,
+    govhistory_handler,
     digest_handler,
     free_text_handler,
     help_handler,
@@ -42,6 +47,8 @@ from src.bot.handlers import (
     stop_handler,
     subscribe_handler,
     unsubscribe_handler,
+    proposal_handler,
+    vote_handler,
 )
 from src.database.manager import DatabaseManager
 from src.scheduler.scheduler import scheduler
@@ -160,6 +167,15 @@ def build_application() -> Application:
     application.add_handler(ask_handler)
     application.add_handler(stop_handler)
     application.add_handler(governance_command)
+
+    # Governance & Voting handlers
+    application.add_handler(delegate_handler)
+    application.add_handler(revoke_handler)
+    application.add_handler(govstatus_handler)
+    application.add_handler(vote_handler)
+    application.add_handler(proposal_handler)
+    application.add_handler(govlist_handler)
+    application.add_handler(govhistory_handler)
 
     # Admin-only commands (ADMIN_CHAT_ID)
     application.add_handler(CommandHandler("admin_stats", admin_stats_handler))

@@ -42,9 +42,6 @@ class PaymentFetcher:
     CUSD_CONTRACT: str = Web3.to_checksum_address(
         "0x765DE816845861e75A25fCA122bb6898B8B1282a"
     )
-    TRANSFER_TOPIC: str = Web3.keccak(
-        text="Transfer(address,address,uint256)"
-    ).hex()
 
     def __init__(self, rpc_url: str = _CELO_RPC) -> None:
         self._w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
@@ -86,6 +83,12 @@ class PaymentFetcher:
             None if receipt not found, transaction failed, wrong recipient,
             or no Transfer log is present.
         """
+        try:
+            expected_to_checksum = Web3.to_checksum_address(expected_to)
+        except ValueError:
+            logger.warning("[PAYMENT] verify_tx invalid expected_to address: %s", expected_to)
+            return None
+
         receipt = None
         for attempt in range(1, _VERIFY_RETRIES + 1):
             receipt = await self._run_sync(self._get_receipt_sync, tx_hash)
@@ -107,58 +110,59 @@ class PaymentFetcher:
             logger.info("[PAYMENT] verify_tx | hash: %s... | status: fail (tx reverted)", tx_hash[:10])
             return None
 
-        # The transaction must have been sent to the cUSD contract
-        receipt_to = (receipt.get("to") or "").lower()
-        if receipt_to != self.CUSD_CONTRACT.lower():
-            logger.info(
-                "[PAYMENT] verify_tx | hash: %s... | status: fail (to mismatch: %s)",
-                tx_hash[:10], receipt_to,
-            )
-            return None
-
-        # Decode Transfer logs from the cUSD contract
-        transfer_log = None
+        # Decode Transfer logs from the cUSD contract and match Transfer.to
         for log in receipt.get("logs", []):
-            log_address = (log.get("address") or "").lower()
-            if log_address != self.CUSD_CONTRACT.lower():
+            log_address_raw = log.get("address") or ""
+            if not log_address_raw:
                 continue
-            topics = log.get("topics", [])
-            if not topics:
+
+            try:
+                log_address = Web3.to_checksum_address(log_address_raw)
+            except ValueError:
                 continue
-            first_topic = topics[0].hex() if hasattr(topics[0], "hex") else str(topics[0])
-            if first_topic.lower() != self.TRANSFER_TOPIC.lower():
+
+            if log_address != self.CUSD_CONTRACT:
                 continue
-            transfer_log = log
-            break
 
-        if transfer_log is None:
-            logger.info("[PAYMENT] verify_tx | hash: %s... | status: fail (no Transfer log)", tx_hash[:10])
-            return None
+            try:
+                decoded = self._contract.events.Transfer().process_log(log)
+            except Exception:
+                continue
 
-        # Decode: topics[1]=from (indexed), topics[2]=to (indexed), data=value
-        topics = transfer_log["topics"]
-        from_addr = "0x" + topics[1].hex()[-40:]
-        to_addr = "0x" + topics[2].hex()[-40:]
+            args = decoded.get("args", {})
+            to_addr = args.get("to")
+            if not to_addr:
+                continue
 
-        if to_addr.lower() != expected_to.lower():
+            try:
+                to_checksum = Web3.to_checksum_address(to_addr)
+            except ValueError:
+                continue
+
+            if to_checksum != expected_to_checksum:
+                continue
+
+            from_addr = args.get("from")
+            raw_value = args.get("value")
+            if from_addr is None or raw_value is None:
+                continue
+
+            value_cusd = int(raw_value) / 1e18
+
             logger.info(
-                "[PAYMENT] verify_tx | hash: %s... | status: fail (Transfer.to %s != expected %s)",
-                tx_hash[:10], to_addr, expected_to,
+                "[PAYMENT] verify_tx | hash: %s... | status: ok | from: %s | value: %.4f cUSD",
+                tx_hash[:10],
+                from_addr,
+                value_cusd,
             )
-            return None
+            return {
+                "from": Web3.to_checksum_address(from_addr),
+                "value_cusd": value_cusd,
+                "block": receipt["blockNumber"],
+            }
 
-        raw_value = int(transfer_log["data"].hex(), 16) if hasattr(transfer_log["data"], "hex") else int(transfer_log["data"], 16)
-        value_cusd = raw_value / 1e18
-
-        logger.info(
-            "[PAYMENT] verify_tx | hash: %s... | status: ok | from: %s | value: %.4f cUSD",
-            tx_hash[:10], from_addr, value_cusd,
-        )
-        return {
-            "from": Web3.to_checksum_address(from_addr),
-            "value_cusd": value_cusd,
-            "block": receipt["blockNumber"],
-        }
+        logger.info("[PAYMENT] verify_tx | hash: %s... | status: fail (no matching Transfer log)", tx_hash[:10])
+        return None
 
     async def watch_incoming_cusd(self, from_block: int) -> list[dict]:
         """Scan Celo logs for cUSD transfers sent to BOT_WALLET_ADDRESS.
@@ -175,19 +179,16 @@ class PaymentFetcher:
             logger.warning("[PAYMENT] BOT_WALLET_ADDRESS not set — skipping watch_incoming_cusd")
             return []
 
-        padded_to = "0x" + "0" * 24 + bot_wallet[2:].lower()
-
         def _get_logs():
-            return self._w3.eth.get_logs(
-                {
-                    "address": self.CUSD_CONTRACT,
-                    "topics": [
-                        self.TRANSFER_TOPIC,
-                        None,
-                        padded_to,
-                    ],
-                    "fromBlock": from_block,
-                }
+            try:
+                bot_wallet_checksum = Web3.to_checksum_address(bot_wallet)
+            except ValueError:
+                raise ValueError(f"Invalid BOT_WALLET_ADDRESS: {bot_wallet}")
+
+            # Use the contract + minimal ABI event definition to filter by Transfer.to
+            return self._contract.events.Transfer.get_logs(
+                fromBlock=from_block,
+                argument_filters={"to": bot_wallet_checksum},
             )
 
         try:
@@ -199,18 +200,27 @@ class PaymentFetcher:
         to_block = from_block
         results: list[dict] = []
         for log in logs:
-            topics = log["topics"]
-            from_addr = "0x" + topics[1].hex()[-40:]
-            raw_value = int(log["data"].hex(), 16) if hasattr(log["data"], "hex") else int(log["data"], 16)
-            value_cusd = raw_value / 1e18
-            tx_hash = log["transactionHash"].hex()
+            try:
+                decoded = self._contract.events.Transfer().process_log(log)
+            except Exception:
+                continue
+
+            args = decoded.get("args", {})
+            from_addr = args.get("from")
+            raw_value = args.get("value")
+            if from_addr is None or raw_value is None:
+                continue
+
+            value_cusd = int(raw_value) / 1e18
+            tx_hash_hex = log["transactionHash"].hex()
+            tx_hash = "0x" + tx_hash_hex if not tx_hash_hex.startswith("0x") else tx_hash_hex
             block_number = log["blockNumber"]
             to_block = max(to_block, block_number)
             results.append(
                 {
                     "from": Web3.to_checksum_address(from_addr),
                     "value_cusd": value_cusd,
-                    "tx_hash": "0x" + tx_hash if not tx_hash.startswith("0x") else tx_hash,
+                    "tx_hash": tx_hash,
                     "block": block_number,
                 }
             )

@@ -229,22 +229,20 @@ def _get_proposal_stage_sync(w3: Web3, contract_address: str, proposal_id: int) 
         return None
 
 
-def _stage_to_active_bucket(stage: int | None) -> str | None:
-    """Map the Celo Governance ProposalStage enum to active buckets only.
+def _classify_proposal_status(stage: int | None) -> str | None:
+    """Classify a proposal into active governance UX buckets.
 
-    Active stages:
-      1 = Queued
-      2 = Approval (treated as Queued)
-      3 = Active (Voting)
-
-    Ignored (history / not actionable):
-      0 = None
-      4 = Execution
+    Mapping (contract enum -> active-only UX):
+      - 1 = Queued
+      - 2 = Approval (treated as Queued)
+      - 3 = Active (Voting)
+      - 0 / 4 / None = ignored (history / not actionable)
     """
     if stage in {1, 2}:
         return "Queued"
     if stage == 3:
         return "Active"
+    # Ignore history / not actionable proposals.
     return None
 
 
@@ -254,12 +252,12 @@ async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[
     Steps:
       1. Read raw arrays from getQueue() and getDequeue().
       2. Remove zeros (0) and deduplicate proposal ids.
-      3. Resolve true stage for each id via getProposalStage(id) in parallel.
-      4. Keep ONLY actionable stages:
-         - 1/2 -> Queued
-         - 3   -> Active
-         Ignore stage 0 and 4 (history / not actionable).
-      5. Sort each bucket desc.
+      3. Resolve the true on-chain status for each proposal id using
+         `getProposalStage(id)`.
+      4. Categorize into UX buckets:
+         - Queued
+         - Active
+      5. Sort ids desc (most recent → oldest). Ignore stage 0 / 4 / None.
 
     Args:
         w3: Initialized Web3 instance (HTTPProvider recommended).
@@ -270,40 +268,90 @@ async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[
         {"Queued": [...], "Active": [...]}.
         Returns empty lists on failure.
     """
-    raw = await asyncio.to_thread(_get_active_proposals_onchain_sync, w3, contract_address)
-    queued_raw = raw.get("queued", [])
-    dequeued_raw = raw.get("dequeued", [])
+    try:
+        raw = await asyncio.to_thread(
+            _get_active_proposals_onchain_sync, w3, contract_address
+        )
+        queued_raw = raw.get("queued", [])
+        dequeued_raw = raw.get("dequeued", [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[GOVERNANCE] get_active_proposals_onchain failed to read queues | error=%s",
+            exc,
+        )
+        return {
+            "Queued": [],
+            "Active": [],
+        }
 
+    # Merge + clean raw arrays: remove zeros and duplicates.
     queued_set = {int(x) for x in queued_raw if int(x) != 0}
     dequeued_set = {int(x) for x in dequeued_raw if int(x) != 0}
     all_ids = sorted(queued_set | dequeued_set, reverse=True)
 
     if not all_ids:
-        return {"Queued": [], "Active": []}
+        return {
+            "Queued": [],
+            "Active": [],
+        }
 
-    async def _fetch_bucket(pid: int) -> tuple[int, str | None]:
-        stage = await asyncio.to_thread(_get_proposal_stage_sync, w3, contract_address, pid)
-        bucket = _stage_to_active_bucket(stage)
-        return pid, bucket
+    def _get_stage_sync(
+        w3_sync: Web3, contract_addr: str, pid: int
+    ) -> tuple[int, int | None]:
+        """Sync helper for getProposalStage.
+
+        Returns (proposal_id, stage).
+        On any revert/error, stage is returned as None.
+        """
+        try:
+            w3_local = w3_sync
+            contract = w3_local.eth.contract(
+                address=Web3.to_checksum_address(contract_addr),
+                abi=GOVERNANCE_ABI_MINIMAL,
+            )
+            stage = contract.functions.getProposalStage(int(pid)).call()
+            stage_int = int(stage)
+            return int(pid), stage_int
+        except ContractLogicError:
+            return int(pid), None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "[GOVERNANCE] getProposalStage failed | pid=%s | error=%s",
+                pid,
+                exc,
+            )
+            return int(pid), None
+
+    async def _fetch_status(pid: int) -> tuple[int, str | None]:
+        pid_res, stage_res = await asyncio.to_thread(
+            _get_stage_sync, w3, contract_address, pid
+        )
+        return pid_res, _classify_proposal_status(stage_res)
 
     try:
-        pairs = await asyncio.gather(*[_fetch_bucket(pid) for pid in all_ids])
+        statuses = await asyncio.gather(*[_fetch_status(pid) for pid in all_ids])
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[GOVERNANCE] Failed to resolve proposal stages | error=%s", exc)
-        return {"Queued": [], "Active": []}
+        logger.warning(
+            "[GOVERNANCE] Failed to resolve proposal statuses | error=%s", exc
+        )
+        return {
+            "Queued": [],
+            "Active": [],
+        }
 
-    buckets: dict[str, list[int]] = {"Queued": [], "Active": []}
+    status_by_pid: dict[int, str | None] = {pid: bucket for pid, bucket in statuses}
 
-    for pid, bucket in pairs:
-        if bucket is None:
-            continue
-        buckets.setdefault(bucket, []).append(int(pid))
+    # Sort order: `all_ids` is already descending (most recent → oldest).
+    result: dict[str, list[int]] = {"Queued": [], "Active": []}
 
-    # Sort buckets and cap inactive ones
-    for key in ("Queued", "Active"):
-        buckets[key] = sorted(set(buckets.get(key, [])), reverse=True)
+    for pid in all_ids:
+        bucket = status_by_pid.get(pid)
+        if bucket == "Queued":
+            result["Queued"].append(int(pid))
+        elif bucket == "Active":
+            result["Active"].append(int(pid))
 
-    return buckets
+    return result
 
 
 async def get_historical_proposals_onchain(w3: Web3, contract_address: str) -> list[int]:

@@ -18,7 +18,6 @@ from src.bot.handlers import (
     PLAN_7D_CUSD,
     PREMIUM_MESSAGE,
     WELCOME_MESSAGE,
-    governance_handler as governance_logic,
 )
 from src.bot.keyboards import (
     CATEGORY_DISPLAY,
@@ -95,8 +94,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _handle_back(query, user_id)
         elif data == "help:open":
             await _handle_help_open(query)
-        elif data == "governance:open":
-            await governance_logic(update, context)
         elif data == "govlist":
             await _handle_govlist(query)
         elif data == "govhistory":
@@ -645,7 +642,7 @@ async def _handle_help_open(query) -> None:
 
 
 async def _handle_govlist(query) -> None:
-    """Fetch and display active governance proposals (Queued + Active)."""
+    """Fetch and display active governance proposals (Queued + Dequeued)."""
     rpc_url = get_env_or_fail("CELO_RPC_URL")
     w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
 
@@ -666,8 +663,9 @@ async def _handle_govlist(query) -> None:
     text = (
         "🏛️ <b>Celo Governance — Active Proposals</b>\n\n"
         f"⏳ <b>Queued:</b> {queued_str}\n"
-        f"🗳️ <b>Active Voting:</b> {active_str}\n"
-        "\n<i>Tip: use <code>/proposal &lt;id&gt;</code> for an AI summary.</i>"
+        f"🗳️ <b>Active Voting:</b> {active_str}\n\n"
+        "<i>Use <code>/proposal &lt;id&gt;</code> to read an AI summary and "
+        "<code>/vote &lt;id&gt;</code> to cast your vote.</i>"
     )
 
     try:

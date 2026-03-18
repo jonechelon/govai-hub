@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS governance_alerts (
     proposal_id     BIGINT PRIMARY KEY,
     proposer        VARCHAR(42) NOT NULL,
     description_url VARCHAR(500),
-    deposit_celo    FLOAT,
+    deposit_cusd    NUMERIC(36, 18),
     queued_at       TIMESTAMPTZ NOT NULL,
     block_number    BIGINT NOT NULL,
     tx_hash         VARCHAR(66) NOT NULL UNIQUE,
@@ -427,6 +427,20 @@ class DatabaseManager:
                     user.wallet_address = wallet_address
         logger.info("[DB] Wallet set | user=%s | wallet=%s", user_id, wallet_address)
 
+    # ─── set_user_wallet ─────────────────────────────────────────────────────
+
+    async def set_user_wallet(self, user_id: int, wallet_address: str) -> None:
+        """Save or update the user's governance wallet address (LockedGold user wallet)."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(select(User).where(User.user_id == user_id))
+                user = result.scalar_one_or_none()
+                if user:
+                    user.user_wallet = wallet_address
+        logger.info(
+            "[DB] Governance wallet set | user=%s | user_wallet=%s", user_id, wallet_address
+        )
+
     # ─── get_wallet ───────────────────────────────────────────────────────────
 
     async def get_wallet(self, user_id: int) -> str | None:
@@ -465,11 +479,17 @@ class DatabaseManager:
                 if not user:
                     logger.warning("[DB] User %s not found — cannot update delegation status", user_id)
                     return
+                current_delegated = bool(user.delegated_power)
                 user.delegated_power = delegated
+
                 if delegated:
+                    # Clear any previous revocation timestamp when delegation is present.
                     user.revoked_at = None
                 else:
-                    user.revoked_at = datetime.now(timezone.utc)
+                    # Set revoked_at only on transition from delegated=True → delegated=False.
+                    # This prevents repeatedly overwriting the revocation time on every /govstatus call.
+                    if current_delegated:
+                        user.revoked_at = datetime.now(timezone.utc)
         logger.info("[DB] Delegation status updated | user=%s | delegated=%s", user_id, delegated)
 
     # ─── downgrade_expired_users ──────────────────────────────────────────────
@@ -522,7 +542,7 @@ class DatabaseManager:
                 proposal_id=proposal["proposal_id"],
                 proposer=proposal["proposer"],
                 description_url=proposal.get("description_url"),
-                deposit_celo=proposal.get("deposit"),
+                deposit_cusd=proposal.get("deposit"),
                 queued_at=proposal["queued_at"],
                 block_number=proposal["block_number"],
                 tx_hash=proposal["tx_hash"],
@@ -665,11 +685,10 @@ class DatabaseManager:
         result_list: list[dict] = []
         for proposal_id, data in aggregated.items():
             counts = data["counts"]
-            # Deterministic tie-breaking order: YES > NO > ABSTAIN
-            majority_choice = max(
-                ["YES", "NO", "ABSTAIN"],
-                key=lambda choice: counts.get(choice, 0),
-            )
+            # Choose ABSTAIN when no strict majority exists (ties across the top counts).
+            max_count = max(counts.values())
+            top_choices = [choice for choice, c in counts.items() if c == max_count]
+            majority_choice = top_choices[0] if len(top_choices) == 1 else "ABSTAIN"
             result_list.append(
                 {
                     "proposal_id": proposal_id,

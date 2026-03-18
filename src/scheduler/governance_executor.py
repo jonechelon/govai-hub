@@ -169,6 +169,7 @@ class GovernanceExecutor:
             self._w3.eth.get_transaction_count,
             self._bot_wallet_address,
         )
+        chain_id = await self._run_sync(lambda: self._w3.eth.chain_id)
 
         tx_dict = self._contract.functions.vote(
             proposal_id,
@@ -177,6 +178,7 @@ class GovernanceExecutor:
             {
                 "from": self._bot_wallet_address,
                 "nonce": nonce,
+                "chainId": chain_id,
                 "gasPrice": gas_price_wei,
             }
         )
