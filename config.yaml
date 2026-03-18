@@ -205,5 +205,5 @@ erc8004:
   # identity_registry: "0x8004A818BFB912233c491871b3d84c89A494BD9e"
   agent_name: "Celo GovAI Hub"
   agent_description: "AI-powered Telegram bot delivering daily Celo blockchain digests. Monitors MiniPay, Valora, Ubeswap, Mento, ImpactMarket and more. Premium subscriptions paid in CELO"
-  agent_endpoint: "https://t.me/uptocelo_bot"
+  agent_endpoint: "https://t.me/CeloGovAI_bot"
   chain_id: 42220

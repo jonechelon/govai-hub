@@ -533,10 +533,11 @@ def main() -> None:
     print()
     print("  Suggested tweet:")
     print(
-        f"  🤖 @UpToCeloBot is now a registered ERC-8004 agent on @Celo Mainnet!\n"
+        f"  🤖 @CeloGovAI is now a registered ERC-8004 agent on @Celo!\n"
         f"  agentId: {agent_id}\n"
-        f"  Delivering daily AI-powered Celo blockchain digests in Telegram.\n"
-        f"  #Celo #ERC8004 #AI #Web3"
+        f"  The ultimate Governance Hub for the Celo ecosystem.\n"
+        f"  Use fast commands like /vote, track proposals, and participate in DAO governance with AI.\n"
+        f"  #Celo #Governance #AI #ERC8004"
     )
     print("=" * 70)
     print()

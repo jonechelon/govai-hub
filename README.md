@@ -15,7 +15,7 @@
 >
 > **With Celo GovAI Hub**, once `LockedGold` delegation is in place, governance becomes a frictionless, mobile-native interaction. You vote directly from Telegram using a single, fast command: `/vote <id> YES|NO|ABSTAIN` (e.g., `/vote 47 YES`).
 
-**Try it:** [@CeloGovAI_bot](https://t.me/UpToCeloBot)
+**Try it:** [@CeloGovAI_bot](https://t.me/CeloGovAI_bot)
 
 ---
 
@@ -153,8 +153,8 @@ actions do not accidentally overspend during periods of severe congestion.
 ## Quick Start
 
 ```bash
-git clone https://github.com/jonechelon/up-to-celo
-cd up-to-celo
+git clone https://github.com/jonechelon/CeloGovAIHub.git
+cd CeloGovAIHub
 cp .env.example .env   # fill in keys — see .env.example
 pip install -r requirements.txt
 python -m src.bot.app
