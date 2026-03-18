@@ -1,5 +1,5 @@
 # src/fetchers/market_fetcher.py
-# Up-to-Celo — Market fetcher for CELO via CoinGecko and DeFi Llama (P13)
+# Celo GovAI Hub — Market fetcher for CELO via CoinGecko and DeFi Llama (P13)
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class MarketFetcher:
     CACHE_FILE = MARKET_CACHE_PATH
     CACHE_TTL_MINUTES = 30
     REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
-    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Up-to-Celo/1.1)"}
+    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Celo GovAI Hub/1.1)"}
     MAX_RETRIES = 3
     RETRY_BACKOFF = (1, 2, 4)  # seconds between retries
 

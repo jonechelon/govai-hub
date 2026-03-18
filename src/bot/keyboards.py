@@ -48,10 +48,13 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton("⚙️ Settings", callback_data="settings:open"),
     ]
     row2 = [
+        InlineKeyboardButton("🏛️ Governance", callback_data="governance:open"),
+    ]
+    row3 = [
         InlineKeyboardButton("💎 Premium", callback_data="premium:open"),
         InlineKeyboardButton("❓ Help", callback_data="help:open"),
     ]
-    return InlineKeyboardMarkup([row1, row2])
+    return InlineKeyboardMarkup([row1, row2, row3])
 
 
 def get_digest_keyboard(digest_id: str) -> InlineKeyboardMarkup:
@@ -137,6 +140,9 @@ def get_settings_keyboard(
     rows.append([
         InlineKeyboardButton("💾 Save & Close", callback_data="settings_close")
     ])
+    rows.append([
+        InlineKeyboardButton("« Back to Main Menu", callback_data="start")
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -174,13 +180,13 @@ def get_premium_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "⭐ 7 days — 7 CELO",
+                "⭐ 7 days — 0.50 cUSD",
                 callback_data="premium:7d",
             )
         ],
         [
             InlineKeyboardButton(
-                "⭐ 30 days — 20 CELO",
+                "⭐ 30 days — 1.50 cUSD",
                 callback_data="premium:30d",
             )
         ],
@@ -188,6 +194,12 @@ def get_premium_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 "✅ I sent — /confirmpayment",
                 callback_data="premium:confirm",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "« Back to Main Menu",
+                callback_data="start",
             )
         ],
     ])
@@ -207,5 +219,29 @@ def get_premium_plan_keyboard(days: int) -> InlineKeyboardMarkup:
                 "⬅️ Back to plans",
                 callback_data="premium:back",
             )
+        ],
+        [
+            InlineKeyboardButton(
+                "« Back to Main Menu",
+                callback_data="start",
+            )
+        ],
+    ])
+
+
+def governance_keyboard() -> InlineKeyboardMarkup:
+    """Build the governance submenu keyboard."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Active Proposals", callback_data="govlist"),
+        ],
+        [
+            InlineKeyboardButton("Voting History", callback_data="govhistory"),
+        ],
+        [
+            InlineKeyboardButton("My Status & Delegate", callback_data="govstatus"),
+        ],
+        [
+            InlineKeyboardButton("« Back to Main Menu", callback_data="start"),
         ],
     ])

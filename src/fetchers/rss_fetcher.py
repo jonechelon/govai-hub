@@ -1,5 +1,5 @@
 # src/fetchers/rss_fetcher.py
-# Up-to-Celo — RSS fetcher for Celo ecosystem feeds (P11)
+# Celo GovAI Hub — RSS fetcher for Celo ecosystem feeds (P11)
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ class RSSFetcher:
     CACHE_TTL_MINUTES = 30
     MAX_ITEMS_PER_FEED = 5
     REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
-    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Up-to-Celo/1.1)"}
+    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Celo GovAI Hub/1.1)"}
 
     async def fetch_all(self) -> list[dict]:
         """Fetch all configured RSS feeds, with cache and parallel requests.

@@ -1,1 +1,1 @@
-# Up-to-Celo — utils package
+# Celo GovAI Hub — utils package

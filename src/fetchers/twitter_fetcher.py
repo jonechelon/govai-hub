@@ -1,5 +1,5 @@
 # src/fetchers/twitter_fetcher.py
-# Up-to-Celo — Twitter fetcher via Nitter RSS (P12)
+# Celo GovAI Hub — Twitter fetcher via Nitter RSS (P12)
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class TwitterFetcher:
     CACHE_TTL_MINUTES = 30
     MAX_ITEMS_PER_ACCOUNT = 5
     REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
-    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Up-to-Celo/1.1)"}
+    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Celo GovAI Hub/1.1)"}
 
     async def fetch_all(self) -> list[dict]:
         """Fetch all configured Twitter accounts via Nitter instances.

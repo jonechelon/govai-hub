@@ -1,5 +1,5 @@
 # scripts/test_connection.py
-# Up-to-Celo — standalone connectivity test for all external services
+# Celo GovAI Hub — standalone connectivity test for all external services
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ async def check_telegram(config) -> None:
             try:
                 await bot.send_message(
                     chat_id=config.admin_chat_id,
-                    text="🟡 Up-to-Celo iniciado! Connectivity test running...",
+                    text="🟡 Celo GovAI Hub started! Connectivity test running...",
                 )
                 ok("Telegram send_message()", f"Message sent to admin_chat_id: {config.admin_chat_id}")
             except TelegramError as exc:
@@ -196,7 +196,7 @@ async def check_wallet_cusd_balance(config) -> None:
 def print_summary() -> bool:
     """Print final summary table. Returns True if all checks passed."""
     print("\n" + "─" * 60)
-    print("📊 Up-to-Celo — Connectivity Test Summary")
+    print("📊 Celo GovAI Hub — Connectivity Test Summary")
     print("─" * 60)
     all_ok = True
     for service, result in RESULTS.items():
@@ -233,7 +233,7 @@ async def run_all_checks(config) -> bool:
 
 
 def main() -> None:
-    print("🟡 Up-to-Celo — Connectivity Test")
+    print("🟡 Celo GovAI Hub — Connectivity Test")
     print("=" * 60)
 
     try:

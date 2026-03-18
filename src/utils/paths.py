@@ -1,5 +1,5 @@
 """
-Centralized absolute path constants for the Up-to-Celo project.
+Centralized absolute path constants for the Celo GovAI Hub project.
 
 All cache, log, and data directories are derived from PROJECT_ROOT so the
 bot works correctly regardless of the working directory at runtime.

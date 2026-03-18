@@ -1,5 +1,5 @@
 # src/scheduler/notifier.py
-# Up-to-Celo — Notifier: broadcast daily digest to all subscribers (P21)
+# Celo GovAI Hub — Notifier: broadcast daily digest to all subscribers (P21)
 
 from __future__ import annotations
 
@@ -13,10 +13,12 @@ from telegram.error import Forbidden, RetryAfter
 from telegram.helpers import escape_markdown
 
 from src.ai.digest_generator import digest_generator
+from src.ai.groq_client import generate_proposal_summary
 from src.bot.keyboards import get_digest_keyboard
 from src.database.manager import DatabaseManager, db
 from src.database.models import GovernanceAlert
 from src.utils.health_check import set_last_digest_at
+from src.utils.text_extractor import extract_proposal_text, FALLBACK_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,7 @@ def _build_governance_keyboard(tx_hash: str) -> InlineKeyboardMarkup:
     )
 
 
-def _build_governance_message(alert: GovernanceAlert) -> str:
+def _build_governance_message(alert: GovernanceAlert, ai_summary: str | None = None) -> str:
     """Build the Markdown message text for a governance alert."""
     proposer_short = _shorten_address(alert.proposer)
     deposit_str = f"{alert.deposit_celo:.1f}" if alert.deposit_celo is not None else "N/A"
@@ -86,13 +88,21 @@ def _build_governance_message(alert: GovernanceAlert) -> str:
     )
     description = safe_url or "No description provided"
 
+    ai_block = ""
+    if ai_summary:
+        ai_block = (
+            "\n\n💡 AI Summary\n"
+            f"{ai_summary}"
+        )
+
     return (
         "🏛️ *New Celo Governance Proposal*\n\n"
         f"📋 *Proposal \\#{alert.proposal_id}*\n"
         f"👤 Proposer: `{proposer_short}`\n"
         f"💰 Deposit: {deposit_str} CELO\n"
         f"🕐 Queued: {queued_relative}\n\n"
-        f"🔗 Description: {description}\n\n"
+        f"🔗 Description: {description}\n"
+        f"{ai_block}\n\n"
         "Stay informed — vote on Celo governance matters\\! 🌿"
     )
 
@@ -205,7 +215,23 @@ class Notifier:
             logger.info("[GOVERNANCE] No subscribers — skipping broadcast")
             return
 
-        text = _build_governance_message(alert)
+        ai_summary_safe = ""
+        try:
+            if alert.description_url:
+                proposal_text = await asyncio.to_thread(
+                    extract_proposal_text, alert.description_url
+                )
+                if proposal_text and proposal_text != FALLBACK_TEXT:
+                    summary = await generate_proposal_summary(proposal_text)
+                    ai_summary_safe = escape_markdown(summary, version=2)
+        except Exception as exc:
+            logger.warning(
+                "[GOVERNANCE] AI summary generation failed | id=%s | error=%s",
+                alert.proposal_id,
+                exc,
+            )
+
+        text = _build_governance_message(alert, ai_summary=ai_summary_safe or None)
         keyboard = _build_governance_keyboard(alert.tx_hash)
 
         ok_count = 0

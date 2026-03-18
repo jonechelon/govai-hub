@@ -1,1 +1,1 @@
-# Up-to-Celo — root source package
+# Celo GovAI Hub — root source package

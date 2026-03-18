@@ -13,6 +13,12 @@ web3==6.*
 # Async HTTP client
 aiohttp==3.9.*
 
+# Sync HTTP client (governance text extraction and fallbacks)
+requests==2.*
+
+# HTML parsing / text extraction
+beautifulsoup4==4.*
+
 # Scheduler
 APScheduler==3.10.*
 

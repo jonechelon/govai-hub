@@ -183,3 +183,32 @@ class GroqClient:
 
 # Module-level singleton — imported by DigestGenerator, ask_handler, notifier
 groq_client = GroqClient()
+
+
+async def generate_proposal_summary(text: str) -> str:
+    """Generate an ELI5-style governance proposal summary in exactly 3 bullet points.
+
+    This helper uses the primary llama-3.3-70b-versatile model with a fixed
+    system prompt tailored for Celo governance proposals.
+
+    Args:
+        text: Cleaned proposal description text extracted from the source URL.
+
+    Returns:
+        The LLM-generated summary as a Markdown bullet list.
+    """
+    system_prompt = (
+        "You are a Celo blockchain analyst. Summarize the following technical "
+        "proposal in exactly 3 bullet points using an 'Explain Like I'm 5' "
+        "(ELI5) style. Focus strictly on answering: "
+        "1. What changes? 2. How much does it cost? "
+        "3. Why does it matter to the ecosystem?"
+    )
+    user_prompt = f"Proposal text:\n\n{text}"
+    # 3 short bullets should comfortably fit within 220 tokens.
+    return await groq_client.generate_with_system(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_tokens=220,
+        model="llama-3.3-70b-versatile",
+    )

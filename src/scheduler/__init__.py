@@ -1,1 +1,1 @@
-# Up-to-Celo — scheduler package
+# Celo GovAI Hub — scheduler package

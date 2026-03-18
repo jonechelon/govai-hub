@@ -1,5 +1,5 @@
 # src/utils/env_validator.py
-# Up-to-Celo — environment variable validator
+# Celo GovAI Hub — environment variable validator
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ _VAR_HINTS: dict[str, str] = {
 
 @dataclass
 class Config:
-    """Holds all required environment variables for Up-to-Celo."""
+    """Holds all required environment variables for Celo GovAI Hub."""
 
     telegram_bot_token: str
     admin_chat_id: str

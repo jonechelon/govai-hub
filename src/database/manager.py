@@ -23,14 +23,14 @@ COMMIT;
 """
 
 # src/database/manager.py
-# Up-to-Celo — DatabaseManager singleton (async, SQLAlchemy + asyncpg / Neon)
+# Celo GovAI Hub — DatabaseManager singleton (async, SQLAlchemy + asyncpg / Neon)
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.models import (
@@ -38,6 +38,7 @@ from src.database.models import (
     AsyncSessionLocal,
     DigestLog,
     FetcherLog,
+    GovernanceVote,
     GovernanceAlert,
     User,
     UserAppFilter,
@@ -453,6 +454,24 @@ class DatabaseManager:
                 user = result.scalar_one_or_none()
                 return user.user_id if user else None
 
+    # ─── delegation helpers ────────────────────────────────────────────────────
+
+    async def set_delegation_status(self, user_id: int, delegated: bool) -> None:
+        """Update delegated_power and revoked_at for a user in a single transaction."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(select(User).where(User.user_id == user_id))
+                user = result.scalar_one_or_none()
+                if not user:
+                    logger.warning("[DB] User %s not found — cannot update delegation status", user_id)
+                    return
+                user.delegated_power = delegated
+                if delegated:
+                    user.revoked_at = None
+                else:
+                    user.revoked_at = datetime.now(timezone.utc)
+        logger.info("[DB] Delegation status updated | user=%s | delegated=%s", user_id, delegated)
+
     # ─── downgrade_expired_users ──────────────────────────────────────────────
 
     async def downgrade_expired_users(self) -> int:
@@ -556,6 +575,134 @@ class DatabaseManager:
                     .limit(limit)
                 )
                 return list(result.scalars().all())
+
+    async def get_alert_by_id(self, proposal_id: int) -> GovernanceAlert | None:
+        """Return a single governance alert by proposal_id, or None if not found."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GovernanceAlert).where(
+                        GovernanceAlert.proposal_id == proposal_id
+                    )
+                )
+                return result.scalar_one_or_none()
+
+    # ─── governance votes ───────────────────────────────────────────────────────
+
+    async def register_vote_intent(
+        self,
+        user_id: int,
+        proposal_id: int,
+        vote_choice: str,
+    ) -> None:
+        """Upsert a governance vote intent for a user and proposal.
+
+        If a row already exists for (user_id, proposal_id), the vote_choice is updated.
+        """
+        normalized_choice = vote_choice.upper()
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GovernanceVote).where(
+                        GovernanceVote.user_id == user_id,
+                        GovernanceVote.proposal_id == proposal_id,
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                if existing is None:
+                    session.add(
+                        GovernanceVote(
+                            user_id=user_id,
+                            proposal_id=proposal_id,
+                            vote_choice=normalized_choice,
+                        )
+                    )
+                else:
+                    existing.vote_choice = normalized_choice
+
+
+    async def get_pending_votes_aggregated(self) -> list[dict]:
+        """Aggregate pending governance votes by proposal and compute majority choice.
+
+        Pending votes are those where executed_tx_hash IS NULL. For each proposal_id, this
+        method returns a dict with:
+            - proposal_id: int
+            - majority_choice: str ("YES", "NO", or "ABSTAIN")
+            - user_ids: list[int] of users who have an intent registered
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(
+                        GovernanceVote.proposal_id,
+                        GovernanceVote.user_id,
+                        GovernanceVote.vote_choice,
+                    ).where(GovernanceVote.executed_tx_hash.is_(None))
+                )
+                rows = result.all()
+
+        aggregated: dict[int, dict] = {}
+        for proposal_id, user_id, vote_choice in rows:
+            bucket = aggregated.setdefault(
+                proposal_id,
+                {
+                    "proposal_id": proposal_id,
+                    "counts": {"YES": 0, "NO": 0, "ABSTAIN": 0},
+                    "user_ids": [],
+                },
+            )
+            normalized = (vote_choice or "").upper()
+            if normalized not in {"YES", "NO", "ABSTAIN"}:
+                logger.warning(
+                    "[DB] Ignoring invalid vote_choice '%s' for proposal %s",
+                    vote_choice,
+                    proposal_id,
+                )
+                continue
+            bucket["counts"][normalized] += 1
+            bucket["user_ids"].append(user_id)
+
+        result_list: list[dict] = []
+        for proposal_id, data in aggregated.items():
+            counts = data["counts"]
+            # Deterministic tie-breaking order: YES > NO > ABSTAIN
+            majority_choice = max(
+                ["YES", "NO", "ABSTAIN"],
+                key=lambda choice: counts.get(choice, 0),
+            )
+            result_list.append(
+                {
+                    "proposal_id": proposal_id,
+                    "majority_choice": majority_choice,
+                    "user_ids": data["user_ids"],
+                }
+            )
+
+        logger.info(
+            "[DB] Aggregated pending governance votes | proposals=%s",
+            len(result_list),
+        )
+        return result_list
+
+    async def mark_votes_executed(self, proposal_id: int, tx_hash: str) -> None:
+        """Mark all pending votes for a proposal as executed with the given tx hash."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    update(GovernanceVote)
+                    .where(
+                        and_(
+                            GovernanceVote.proposal_id == proposal_id,
+                            GovernanceVote.executed_tx_hash.is_(None),
+                        )
+                    )
+                    .values(executed_tx_hash=tx_hash)
+                )
+        logger.info(
+            "[DB] Governance votes marked executed | proposal_id=%s | tx=%s",
+            proposal_id,
+            tx_hash,
+        )
 
 
 db = DatabaseManager()

@@ -1,1 +1,1 @@
-# Up-to-Celo — fetchers package
+# Celo GovAI Hub — fetchers package

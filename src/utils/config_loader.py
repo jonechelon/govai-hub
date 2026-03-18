@@ -1,5 +1,5 @@
 # src/utils/config_loader.py
-# Up-to-Celo — YAML configuration loader with validation
+# Celo GovAI Hub — YAML configuration loader with validation
 
 from __future__ import annotations
 

@@ -1,1 +1,1 @@
-# Up-to-Celo — bot package
+# Celo GovAI Hub — bot package

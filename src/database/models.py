@@ -1,5 +1,5 @@
 # src/database/models.py
-# Up-to-Celo — SQLAlchemy async models.
+# Celo GovAI Hub — SQLAlchemy async models.
 # Production: PostgreSQL via Neon (asyncpg driver).
 # Development: SQLite fallback (set DATABASE_URL in .env).
 
@@ -135,6 +135,17 @@ class User(Base):
     )
     wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True, unique=True)
     # Celo wallet address provided by the user for payment verification
+    user_wallet: Mapped[Optional[str]] = mapped_column(String(42), nullable=True)
+    # EVM wallet address used for governance delegation via LockedGold
+    delegated_power: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     premium_tx_hash: Mapped[Optional[str]] = mapped_column(
         String(66), nullable=True, unique=True
     )
@@ -222,6 +233,32 @@ class GovernanceAlert(Base):
     __table_args__ = (
         Index("ix_governance_alerts_sent_at", "sent_at"),
         Index("ix_governance_alerts_queued_at", "queued_at"),
+    )
+
+
+class GovernanceVote(Base):
+    """Stores governance vote intents per user and proposal."""
+
+    __tablename__ = "governance_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.user_id"),
+        nullable=False,
+    )
+    proposal_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    vote_choice: Mapped[str] = mapped_column(String(8), nullable=False)
+    executed_tx_hash: Mapped[Optional[str]] = mapped_column(String(66), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "proposal_id", name="uq_governance_vote_user_proposal"),
+        Index("ix_governance_votes_user_id", "user_id"),
+        Index("ix_governance_votes_proposal_id", "proposal_id"),
     )
 
 

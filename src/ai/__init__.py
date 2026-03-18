@@ -1,1 +1,1 @@
-# Up-to-Celo — ai package
+# Celo GovAI Hub — ai package

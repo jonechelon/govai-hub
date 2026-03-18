@@ -1,5 +1,5 @@
 # src/scheduler/payment_poller.py
-# Up-to-Celo — Background job that monitors the bot wallet for incoming CELO
+# Celo GovAI Hub — Background job that monitors the bot wallet for incoming CELO
 # transfers and activates Premium automatically for registered users.
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ async def _process_transfer_log(log: dict, db, bot) -> None:
                 f"Amount received: {amount_celo:.4f} CELO\n"
                 f"Expires: {expires_at.strftime('%Y-%m-%d')}\n\n"
                 f"You now have unlimited AI queries.\n"
-                f"Enjoy Up-to-Celo Premium!"
+                f"Enjoy Celo GovAI Hub Premium!"
             ),
         )
     except Exception as exc:

@@ -255,7 +255,7 @@ class HealthChecker:
             await self._bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    "Up-to-Celo — Health Alert\n\n"
+                    "Celo GovAI Hub — Health Alert\n\n"
                     f"Status: UNHEALTHY ({self._unhealthy_streak} consecutive cycles)\n\n"
                     f"DB:          {'ok' if status['subscribers_count'] >= 0 else 'ERROR'}\n"
                     f"Groq:        {status['groq_status']}\n"
@@ -279,7 +279,7 @@ class HealthChecker:
             await self._bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    "Up-to-Celo — Recovered\n\n"
+                    "Celo GovAI Hub — Recovered\n\n"
                     "Status: HEALTHY\n\n"
                     f"Bot recovered after {streak} unhealthy cycles.\n"
                     "All systems are operational."

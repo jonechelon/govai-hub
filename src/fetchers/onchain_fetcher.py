@@ -1,5 +1,5 @@
 # src/fetchers/onchain_fetcher.py
-# Up-to-Celo — On-chain fetcher for Celo stablecoin supplies and block number (P14)
+# Celo GovAI Hub — On-chain fetcher for Celo stablecoin supplies and block number (P14)
 
 from __future__ import annotations
 

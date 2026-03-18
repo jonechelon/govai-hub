@@ -1,7 +1,7 @@
 """
 diagnose.py
 
-Standalone diagnostic script for Up-to-Celo.
+Standalone diagnostic script for Celo GovAI Hub.
 Checks all external dependencies and prints a status table.
 Run before deploy or when debugging issues.
 
@@ -453,7 +453,7 @@ def _print_header() -> None:
     width = COL_CHECK + COL_STATUS + COL_LATENCY + COL_DETAIL + 6
     print()
     print("=" * width)
-    print("  Up-to-Celo — Dependency Diagnostic")
+    print("  Celo GovAI Hub — Dependency Diagnostic")
     print("=" * width)
     print(
         f"  {'Check':<{COL_CHECK}} "
@@ -609,7 +609,7 @@ async def run_diagnostics(verbose: bool, fast: bool) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Up-to-Celo — Dependency diagnostic tool",
+        description="Celo GovAI Hub — Dependency diagnostic tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"

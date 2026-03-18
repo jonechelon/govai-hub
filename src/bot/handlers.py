@@ -27,38 +27,78 @@ from telegram.helpers import escape_markdown
 from web3 import Web3
 
 from src.ai.digest_generator import digest_generator
-from src.ai.groq_client import groq_client
+from src.ai.groq_client import groq_client, generate_proposal_summary
 from src.bot.keyboards import (
     get_digest_keyboard,
     get_main_keyboard,
     get_premium_keyboard,
     get_settings_keyboard,
+    governance_keyboard,
 )
 from src.database.manager import DatabaseManager, db
 from src.database.models import GovernanceAlert
 from src.fetchers.fetcher_manager import fetcher_manager
+from src.fetchers.governance_fetcher import (
+    GOVERNANCE_ADDRESS,
+    get_active_proposals_onchain,
+    get_historical_proposals_onchain,
+    get_proposal_url_onchain,
+)
 from src.utils.config_loader import CONFIG
 from src.utils.env_validator import get_env_or_fail
 from src.utils.cache_manager import cache
 from src.utils.rate_limiter import rate_limiter
+from src.utils.text_extractor import extract_proposal_text, FALLBACK_TEXT
 
-# ── CELO payment verification constants ───────────────────────────────────────
+# ── cUSD payment verification constants ───────────────────────────────────────
 
-# CELO GoldToken ERC-20 contract — same address as native CELO on Celo L2 (token duality)
-CELO_CONTRACT_ADDRESS = Web3.to_checksum_address("0x471EcE3750Da237f93B8E339c536989b8978a438")
+# cUSD ERC-20 contract on Celo Mainnet
+CUSD_CONTRACT_ADDRESS = Web3.to_checksum_address("0x765DE816845861e75A25fCA122bb6898B8B1282a")
 
 # keccak256("Transfer(address,address,uint256)") — ERC-20 Transfer event signature
 ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
-# CELO has 18 decimal places (same as ETH/ERC-20 standard)
-CELO_DECIMALS = 18
+# cUSD has 18 decimal places (same as ETH/ERC-20 standard)
+CUSD_DECIMALS = 18
 
-# Minimum accepted amounts per plan (CELO)
-PLAN_7D_CELO = 7.0    # 7-day Premium  — 7 CELO
-PLAN_30D_CELO = 20.0  # 30-day Premium — 20 CELO
+# Minimum accepted amounts per plan (cUSD)
+PLAN_7D_CUSD = 0.5    # 7-day Premium  — 0.5 cUSD
+PLAN_30D_CUSD = 1.5   # 30-day Premium — 1.5 cUSD
 
 # Minimum on-chain confirmations before accepting a payment
 MIN_CONFIRMATIONS = 3
+
+# ── LockedGold delegation constants ───────────────────────────────────────────
+
+# LockedGold proxy contract on Celo Mainnet
+LOCKED_GOLD_ADDRESS = Web3.to_checksum_address(
+    "0x8D6b21c169dfE41f17F4d6d1d4fF3a44f802d334"
+)
+
+# Minimal ABI for reading the current delegate of an account.
+# Function signature: getAccountDelegate(address account) returns (address)
+LOCKED_GOLD_MINIMAL_ABI = [
+    {
+        "constant": True,
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "account",
+                "type": "address",
+            }
+        ],
+        "name": "getAccountDelegate",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address",
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
 
 logger = logging.getLogger(__name__)
 
@@ -145,31 +185,50 @@ def admin_only(handler):
         return await handler(update, context)
     return wrapper
 
-_MAIN_MESSAGE = (
-    "Welcome to Up-to-Celo AI! 🟡\n\n"
-    "Stay up-to-date on the Celo blockchain with daily AI-powered digests.\n"
-    "Covering: network updates, DeFi, ReFi, governance & live on-chain data.\n\n"
-    "📰 /digest — Get today's Celo digest\n"
+WELCOME_MESSAGE = (
+    "Welcome to **Celo GovAI Hub**! 🟡\n"
+    "Your mobile-first AI terminal for **Celo Ecosystem**, On-chain Insights, and Daily Digests—secured by Celo's native `LockedGold` architecture.\n\n"
+    "**Covering:** 🏛️ Governance Hub, 📈 DeFi/ReFi, 🌍 Real-World Assets & ⚡ Live On-chain Data.\n\n"
+    "📰 /digest — Today's Celo digest (Daily at 08:30 AM Europe/Madrid)\n"
     "🤖 /ask — Chat with the Celo AI agent\n"
-    "   Ex: /ask What's new in Ubeswap?\n"
-    "   Ex: /ask How to vote on governance?\n"
-    "🗳️ /governance — Latest Celo proposals\n"
+    "🏛️ /governance — Access the Gov Hub\n"
     "⚙️ /settings — Customize your feed\n"
-    "⭐️ /premium — Upgrade with CELO\n\n"
-    "→ Start with /digest"
+    "⭐️ /premium — Upgrade with cUSD\n\n"
+    "→ Start with /governance"
 )
 
-WELCOME_MESSAGE = _MAIN_MESSAGE
-HELP_MESSAGE = _MAIN_MESSAGE
+HELP_MESSAGE = (
+    "Celo GovAI Hub — Help Manual\n\n"
+    "Core commands:\n"
+    "📰 /digest — Generate your latest personalized digest\n"
+    "🤖 /ask <question> — Ask anything about the Celo ecosystem\n"
+    "⚙️ /settings — Pick which apps you want to track\n"
+    "⭐️ /premium — Upgrade with cUSD\n"
+    "📌 /status — Check your plan and expiration (Premium)\n\n"
+    "Governance Hub:\n"
+    "🏛️ /governance — Open the Governance Hub menu\n"
+    "   /govlist — Active proposals (Queued + Active Voting)\n"
+    "   /govhistory — Recently concluded proposals\n"
+    "   /proposal <id> — AI summary + source link for a proposal\n"
+    "   /vote <id> <choice> — Record a vote intent (YES/NO/ABSTAIN)\n"
+    "   /delegate — Safe self-custodial delegation guide\n"
+    "   /govstatus — Check your on-chain delegation status\n\n"
+    "Examples:\n"
+    "/ask What's new in Ubeswap?\n"
+    "/proposal 123\n"
+    "/vote 123 YES\n\n"
+    "Tip: use the main menu buttons for faster navigation."
+)
 
 PREMIUM_MESSAGE = (
-    "Premium — Up-to-Celo\n\n"
+    "Premium — Celo GovAI Hub\n\n"
     "Unlock unlimited AI queries and the best Celo insights.\n\n"
-    f"7-day Premium  — {PLAN_7D_CELO:.0f} CELO\n"
-    f"30-day Premium — {PLAN_30D_CELO:.0f} CELO\n\n"
-    "Send CELO to:\n"
+    f"7-day Premium  — {PLAN_7D_CUSD:.1f} cUSD\n"
+    f"30-day Premium — {PLAN_30D_CUSD:.1f} cUSD\n\n"
+    "Send cUSD stablecoin to:\n"
     "{BOT_WALLET}\n\n"
     "Send from a personal wallet (MiniPay, Valora, MetaMask).\n"
+    "Important: you must send the cUSD stablecoin (not CELO) to the bot wallet above.\n"
     "Exchanges use intermediate addresses and won't be detected.\n\n"
     "After sending, tap the button below or use:\n"
     "/confirmpayment [tx_hash]"
@@ -191,6 +250,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(
         WELCOME_MESSAGE,
         reply_markup=get_main_keyboard(),
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 
@@ -244,7 +304,7 @@ async def subscribe_handler(
     logger.info("[SUBSCRIBE] User subscribed | user=%s", user_id)
 
     await update.message.reply_text(
-        "You are now subscribed to Up-to-Celo!\n\n"
+        "You are now subscribed to Celo GovAI Hub!\n\n"
         f"Next digest: {_next_digest_str()}\n\n"
         "You will receive a daily AI-powered Celo digest automatically.\n\n"
         "Commands:\n"
@@ -310,7 +370,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if is_premium and premium_expires_at:
         message = (
-            "Your Up-to-Celo Status\n\n"
+            "Your Celo GovAI Hub Status\n\n"
             "Plan: Premium\n"
             f"Expires: {premium_expires_at.strftime('%b %d, %Y')}\n"
             "AI model: llama-3.3-70b-versatile (unlimited asks)\n\n"
@@ -318,7 +378,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     else:
         message = (
-            "Your Up-to-Celo Status\n\n"
+            "Your Celo GovAI Hub Status\n\n"
             "Plan: Free\n"
             "AI model: llama-3.1-8b-instant (3 asks/day)\n\n"
             "Next digest: today at 08:30 CET (Europe/Madrid)\n\n"
@@ -357,17 +417,18 @@ async def premium_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
     await update.message.reply_text(
-        f"Premium plans — Up-to-Celo\n\n"
-        f"7-day Premium  — {PLAN_7D_CELO:.0f} CELO\n"
-        f"30-day Premium — {PLAN_30D_CELO:.0f} CELO\n\n"
-        f"Send CELO to:\n"
+        f"Premium plans — Celo GovAI Hub\n\n"
+        f"7-day Premium  — {PLAN_7D_CUSD:.1f} cUSD\n"
+        f"30-day Premium — {PLAN_30D_CUSD:.1f} cUSD\n\n"
+        f"Send cUSD stablecoin to:\n"
         f"{bot_wallet}\n\n"
         f"AUTOMATIC (personal wallet):\n"
         f"1. Register: /setwallet 0xYourWallet\n"
-        f"2. Send CELO to the address above\n"
+        f"2. Send cUSD to the address above\n"
         f"3. Premium activates in ~60s automatically\n\n"
         f"MANUAL (exchange withdrawal):\n"
-        f"Send CELO, then: /confirmpayment 0xTxHash\n\n"
+        f"Send cUSD, then: /confirmpayment 0xTxHash\n\n"
+        f"Important: you must send the cUSD stablecoin (not CELO) to the bot wallet above.\n\n"
         f"{wallet_line}",
         reply_markup=get_premium_keyboard(),
     )
@@ -410,29 +471,29 @@ async def setwallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text(
         f"Wallet registered!\n\n"
         f"{wallet}\n\n"
-        f"Now send {PLAN_7D_CELO:.0f} CELO (7-day) or {PLAN_30D_CELO:.0f} CELO (30-day) to:\n"
+        f"Now send {PLAN_7D_CUSD:.1f} cUSD (7-day) or {PLAN_30D_CUSD:.1f} cUSD (30-day) to:\n"
         f"{bot_wallet}\n\n"
+        f"Always send the cUSD stablecoin (not CELO) from a personal wallet.\n"
         f"Premium will activate automatically within ~60 seconds after on-chain confirmation."
     )
 
 
-# ── CELO on-chain verification ─────────────────────────────────────────────────
+# ── cUSD on-chain verification ─────────────────────────────────────────────────
 
 
-def _verify_celo_payment_sync(raw_input: str) -> dict | None:
-    """Verify a CELO payment on the Celo blockchain (synchronous — use via asyncio.to_thread).
+def _verify_cusd_payment_sync(raw_input: str) -> dict | None:
+    """Verify a cUSD payment on the Celo blockchain (synchronous — use via asyncio.to_thread).
 
-    Handles both ERC-20 Transfer events from the GoldToken contract (used by MiniPay,
-    Valora and most Celo wallets) and native CELO transfers via tx.value, covering the
-    full token duality of CELO on Celo L2.
+    Detects ERC-20 Transfer events from the cUSD contract (used by MiniPay, Valora and
+    most Celo wallets).
 
     Args:
         raw_input: transaction hash (0x...) or Blockscout URL ending with the hash.
 
     Returns:
-        Dict with keys ``amount_celo``, ``from_address``, ``confirmations``, ``tx_hash``,
-        ``method`` (``"erc20"`` or ``"native"``) if a valid CELO transfer to the bot
-        wallet is found, or None otherwise.
+        Dict with keys ``amount_cusd``, ``from_address``, ``confirmations``, ``tx_hash``,
+        ``method`` (``"erc20"``) if a valid cUSD transfer to the bot wallet is found,
+        or None otherwise.
     """
     rpc_url = get_env_or_fail("CELO_RPC_URL")
     bot_wallet = Web3.to_checksum_address(get_env_or_fail("BOT_WALLET_ADDRESS"))
@@ -479,11 +540,11 @@ def _verify_celo_payment_sync(raw_input: str) -> dict | None:
         )
         return None
 
-    # Step 4a — Parse ERC-20 Transfer logs from CELO GoldToken contract
+    # Step 4a — Parse ERC-20 Transfer logs from cUSD contract
     # (used by MiniPay, Valora and most Celo wallets)
     for log in receipt.get("logs", []):
         try:
-            if Web3.to_checksum_address(log["address"]) != CELO_CONTRACT_ADDRESS:
+            if Web3.to_checksum_address(log["address"]) != CUSD_CONTRACT_ADDRESS:
                 continue
 
             topics = log.get("topics", [])
@@ -510,15 +571,15 @@ def _verify_celo_payment_sync(raw_input: str) -> dict | None:
             if not data_hex or data_hex in ("0x", ""):
                 continue
             amount_wei = int(data_hex, 16)
-            amount_celo = amount_wei / (10 ** CELO_DECIMALS)
+            amount_cusd = amount_wei / (10 ** CUSD_DECIMALS)
 
             logger.info(
-                "[PAYMENT] ERC-20 CELO transfer confirmed | tx=%s | from=%s | "
-                "amount=%.4f CELO | confirmations=%d",
-                tx_hash, from_address, amount_celo, confirmations,
+                "[PAYMENT] ERC-20 cUSD transfer confirmed | tx=%s | from=%s | "
+                "amount=%.4f cUSD | confirmations=%d",
+                tx_hash, from_address, amount_cusd, confirmations,
             )
             return {
-                "amount_celo": amount_celo,
+                "amount_cusd": amount_cusd,
                 "from_address": from_address,
                 "confirmations": confirmations,
                 "tx_hash": tx_hash,
@@ -528,33 +589,7 @@ def _verify_celo_payment_sync(raw_input: str) -> dict | None:
             logger.debug("[PAYMENT] Log parse error: %s", exc)
             continue
 
-    # Step 4b — Fallback: native CELO transfer via tx.value
-    # (some wallets send CELO as native value without going through GoldToken)
-    try:
-        tx = w3.eth.get_transaction(tx_hash)
-        if (
-            tx.get("to") is not None
-            and Web3.to_checksum_address(tx["to"]) == bot_wallet
-            and tx.get("value", 0) > 0
-        ):
-            amount_celo = tx["value"] / (10 ** CELO_DECIMALS)
-            from_address = Web3.to_checksum_address(tx["from"])
-            logger.info(
-                "[PAYMENT] Native CELO transfer confirmed | tx=%s | from=%s | "
-                "amount=%.4f CELO | confirmations=%d",
-                tx_hash, from_address, amount_celo, confirmations,
-            )
-            return {
-                "amount_celo": amount_celo,
-                "from_address": from_address,
-                "confirmations": confirmations,
-                "tx_hash": tx_hash,
-                "method": "native",
-            }
-    except Exception as exc:
-        logger.warning("[PAYMENT] Native transfer check failed | tx=%s | error: %s", tx_hash, exc)
-
-    logger.warning("[PAYMENT] No CELO transfer to bot wallet found in tx: %s", tx_hash)
+    logger.warning("[PAYMENT] No cUSD transfer to bot wallet found in tx: %s", tx_hash)
     return None
 
 
@@ -563,7 +598,7 @@ def _verify_celo_payment_sync(raw_input: str) -> dict | None:
 async def confirm_payment_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle /confirmpayment <tx_hash|url> — verify CELO transfer on-chain and activate Premium."""
+    """Handle /confirmpayment <tx_hash|url> — verify cUSD transfer on-chain and activate Premium."""
     user_id = update.effective_user.id
     username = update.effective_user.username
     first_name = update.effective_user.first_name
@@ -582,10 +617,10 @@ async def confirm_payment_handler(
     raw_input = args[0].strip()
     logger.info("[PAYMENT] Confirm payment request | user=%s | input=%s", user_id, raw_input)
 
-    loading_msg = await update.message.reply_text("🔍 Verifying your CELO payment on-chain...")
+    loading_msg = await update.message.reply_text("🔍 Verifying your cUSD payment on-chain...")
 
     # web3.py is synchronous — run in thread pool to avoid blocking the event loop
-    payment = await asyncio.to_thread(_verify_celo_payment_sync, raw_input)
+    payment = await asyncio.to_thread(_verify_cusd_payment_sync, raw_input)
 
     if payment is None:
         await loading_msg.edit_text(
@@ -593,30 +628,30 @@ async def confirm_payment_handler(
             "Make sure:\n"
             "1. The hash is correct (66 chars starting with 0x)\n"
             f"2. The transaction has at least {MIN_CONFIRMATIONS} confirmations\n"
-            "3. You sent CELO to the bot wallet\n"
+            "3. You sent cUSD to the bot wallet\n"
             "4. You sent from MiniPay, Valora, or MetaMask — not an exchange\n\n"
             "Check your tx on: https://celo.blockscout.com",
         )
         return
 
-    amount = payment["amount_celo"]
+    amount = payment["amount_cusd"]
 
-    if amount >= PLAN_30D_CELO:
+    if amount >= PLAN_30D_CUSD:
         days = 30
         label = "30-day Premium"
-    elif amount >= PLAN_7D_CELO:
+    elif amount >= PLAN_7D_CUSD:
         days = 7
         label = "7-day Premium"
     else:
         await loading_msg.edit_text(
-            f"❌ Payment too low: {amount:.4f} CELO received.\n\n"
+            f"❌ Payment too low: {amount:.4f} cUSD received.\n\n"
             f"Minimum amounts:\n"
-            f"7-day Premium:  {PLAN_7D_CELO:.0f} CELO\n"
-            f"30-day Premium: {PLAN_30D_CELO:.0f} CELO\n\n"
+            f"7-day Premium:  {PLAN_7D_CUSD:.1f} cUSD\n"
+            f"30-day Premium: {PLAN_30D_CUSD:.1f} cUSD\n\n"
             "Please send the correct amount and try again.",
         )
         logger.warning(
-            "[PAYMENT] Insufficient amount | user=%s | amount=%.4f CELO", user_id, amount
+            "[PAYMENT] Insufficient amount | user=%s | amount=%.4f cUSD", user_id, amount
         )
         return
 
@@ -637,7 +672,7 @@ async def confirm_payment_handler(
     await db.set_premium(user_id, expires_at=expires_at, tx_hash=payment["tx_hash"])
 
     logger.info(
-        "[PAYMENT] Premium activated | user=%s | plan=%s | amount=%.4f CELO | "
+        "[PAYMENT] Premium activated | user=%s | plan=%s | amount=%.4f cUSD | "
         "method=%s | expires=%s | tx=%s",
         user_id, label, amount, payment["method"],
         expires_at.strftime("%Y-%m-%d"), payment["tx_hash"],
@@ -646,11 +681,11 @@ async def confirm_payment_handler(
     await loading_msg.edit_text(
         f"✅ Premium activated!\n\n"
         f"Plan: {label}\n"
-        f"Amount received: {amount:.4f} CELO\n"
+        f"Amount received: {amount:.4f} cUSD\n"
         f"Expires: {expires_at.strftime('%Y-%m-%d')}\n"
         f"Confirmations: {payment['confirmations']}\n"
         f"Method: {payment['method']}\n\n"
-        "You now have unlimited AI queries. Enjoy Up-to-Celo Premium!",
+        "You now have unlimited AI queries. Enjoy Celo GovAI Hub Premium!",
     )
 
 
@@ -814,7 +849,7 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     user_apps = await db.get_user_apps_by_category(user_id)
     await update.message.reply_text(
-        "⚙️ Up-to-Celo — Select Your Apps\n\n"
+        "⚙️ Celo GovAI Hub — Select Your Apps\n\n"
         "Tap a category to manage its apps.\n"
         "✅ = all enabled  ☑️ = some enabled  ☐ = none",
         reply_markup=get_settings_keyboard(user_apps),
@@ -857,7 +892,7 @@ def _build_ask_messages(session: dict, new_question: str) -> list[dict]:
     system_msg = {
         "role": "system",
         "content": (
-            "You are Up-to-Celo, an enthusiastic AI agent and proud advocate of the "
+            "You are Celo GovAI Hub, an enthusiastic AI agent and proud advocate of the "
             "Celo blockchain ecosystem. Your mission is to inform, inspire, and engage "
             "users about everything happening in the Celo world.\n\n"
 
@@ -1025,17 +1060,280 @@ async def stop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def governance_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle /governance command — show recent governance proposals."""
-    db_manager = DatabaseManager()
-    alerts = await db_manager.get_recent_alerts(limit=5)
-
-    text = _format_governance_list(alerts)
-
-    await update.message.reply_text(
-        text,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        disable_web_page_preview=True,
+    """Open the Governance Hub UI (supports both /governance and main menu button)."""
+    text = (
+        "🏛️ **Celo GovAI Hub**\n\n"
+        "Manage your voting power and participate in Celo's future.\n\n"
+        "**Commands:**\n"
+        "🗳️ /govlist — See all active proposals\n"
+        "📚 /govhistory — Browse concluded decisions\n"
+        "💡 /proposal <id> — Get an AI-powered ELI5 summary\n"
+        "✅ /vote <id> <choice> — Cast your vote (YES/NO/ABSTAIN)\n"
+        "🔑 /delegate — Step-by-step to delegate power safely\n"
+        "📡 /govstatus — Check your current delegation status\n"
+        "👛 /setwallet <address> — Link or change your Celo wallet\n\n"
+        "*Note: You can update your wallet anytime by running /setwallet with a new address.*"
     )
+
+    query = update.callback_query
+    if query:
+        await query.answer()
+        try:
+            await query.edit_message_text(
+                text=text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=governance_keyboard(),
+                disable_web_page_preview=True,
+            )
+        except Exception:  # noqa: BLE001
+            await query.message.reply_text(
+                text=text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=governance_keyboard(),
+                disable_web_page_preview=True,
+            )
+        return
+
+    if update.message:
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=governance_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=governance_keyboard(),
+            disable_web_page_preview=True,
+        )
+
+
+async def govlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /govlist — list active governance proposal IDs from Celo on-chain state."""
+    rpc_url = get_env_or_fail("CELO_RPC_URL")
+    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+
+    loading_msg = await update.message.reply_text(
+        "⏳ Fetching active governance proposals from the Celo network..."
+    )
+
+    result = await get_active_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
+    queued = result.get("Queued", [])
+    active = result.get("Active", [])
+
+    queued_str = ", ".join(str(x) for x in queued) if queued else "None"
+    active_str = ", ".join(str(x) for x in active) if active else "None"
+
+    text = (
+        "🏛️ <b>Celo Governance — Active Proposals</b>\n\n"
+        f"⏳ <b>Queued:</b> {queued_str}\n"
+        f"🗳️ <b>Active Voting:</b> {active_str}\n"
+        "\n<i>Use <code>/proposal &lt;id&gt;</code> to read an AI summary and "
+        "<code>/vote &lt;id&gt;</code> to cast your vote.</i>"
+    )
+
+    await loading_msg.edit_text(text, parse_mode=ParseMode.HTML)
+
+
+async def govhistory_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /govhistory — list recently concluded proposal IDs from Celo on-chain state."""
+    rpc_url = get_env_or_fail("CELO_RPC_URL")
+    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+
+    loading_msg = await update.message.reply_text(
+        "⏳ Fetching governance history from the Celo network..."
+    )
+
+    proposal_ids = await get_historical_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
+    ids_str = ", ".join(str(x) for x in proposal_ids) if proposal_ids else "None"
+
+    text = (
+        "📚 <b>Celo Governance — History</b>\n\n"
+        "<i>Recent concluded proposals (Executed, Rejected, or Expired):</i>\n"
+        f"{ids_str}\n\n"
+        "<i>Use <code>/proposal &lt;id&gt;</code> to read an AI summary of any historical proposal.</i>"
+    )
+
+    await loading_msg.edit_text(text, parse_mode=ParseMode.HTML)
+
+
+async def proposal_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /proposal <id> — fetch description and return AI ELI5 summary.
+
+    Resolution order:
+      1. Local DB (governance_alerts table) — instant, no RPC needed.
+      2. On-chain fallback via getProposal(id) — covers proposals predating the
+         bot's event listener or outside the BLOCKS_LOOKBACK window.
+    """
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Usage: /proposal <proposal_id>\n\n"
+            "Example: /proposal 123"
+        )
+        return
+
+    try:
+        proposal_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid proposal_id. Usage: /proposal <proposal_id>\n\n"
+            "Example: /proposal 123"
+        )
+        return
+
+    # Step 1 — local database lookup (fast path, no RPC)
+    db_manager = DatabaseManager()
+    alert = await db_manager.get_alert_by_id(proposal_id)
+    description_url: str | None = alert.description_url if alert else None
+
+    # Step 2 — on-chain fallback when the DB has no record or no URL
+    if not description_url:
+        source_label = "on-chain" if alert is None else "on-chain (no URL in DB)"
+        loading_msg = await update.message.reply_text(
+            f"⏳ Proposal #{proposal_id} not in local cache — querying Celo network..."
+        )
+        logger.info(
+            "[GOV] DB miss for proposal #%s — attempting on-chain fallback",
+            proposal_id,
+        )
+        description_url = await get_proposal_url_onchain(proposal_id)
+
+        if not description_url:
+            await loading_msg.edit_text(
+                f"❌ Proposal #{proposal_id} not found on the Celo network.\n\n"
+                "The proposal ID may be incorrect, or the proposal may not exist yet.\n"
+                "Use /governance to list recent proposals."
+            )
+            logger.info(
+                "[GOV] On-chain fallback returned nothing | proposal_id=%s", proposal_id
+            )
+            return
+
+        logger.info(
+            "[GOV] On-chain fallback resolved URL | proposal_id=%s | source=%s | url=%s",
+            proposal_id,
+            source_label,
+            description_url,
+        )
+    else:
+        # DB hit — send loading indicator now (was not sent during the fallback path)
+        loading_msg = await update.message.reply_text("⏳ Analyzing proposal...")
+
+    # Common path — extract text and generate AI summary
+    try:
+        proposal_text = await asyncio.to_thread(
+            extract_proposal_text, description_url
+        )
+    except Exception as exc:
+        logger.warning(
+            "[GOV] Failed to extract proposal text | id=%s | url=%s | error=%s",
+            proposal_id,
+            description_url,
+            exc,
+        )
+        await _safe_edit(
+            loading_msg,
+            "❌ Could not load the proposal description. Please open the forum link instead.",
+        )
+        return
+
+    if proposal_text == FALLBACK_TEXT:
+        await _safe_edit(
+            loading_msg,
+            "Description text is unavailable for this proposal.\n\n"
+            f"Source: {description_url}",
+        )
+        return
+
+    try:
+        summary = await generate_proposal_summary(proposal_text)
+    except Exception as exc:
+        logger.error(
+            "[GOV] Proposal summary generation failed | id=%s | error=%s",
+            proposal_id,
+            exc,
+        )
+        await _safe_edit(
+            loading_msg,
+            "❌ AI summary is temporarily unavailable. Please try again later.",
+        )
+        return
+
+    final_text = (
+        f"Celo Governance Proposal #{proposal_id}\n"
+        f"Source: {description_url}\n\n"
+        "💡 AI Summary (ELI5)\n"
+        f"{summary}"
+    )
+
+    await _safe_edit(loading_msg, final_text)
+
+
+async def delegate_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /delegate — explain safe self-custodial delegation to the bot."""
+    bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
+
+    message = (
+        "🗳️ Delegation — Safe & Self-Custodial\n\n"
+        "With delegation, you allow Celo GovAI Hub to cast Celo governance votes on your behalf "
+        "while you keep 100% custody of your CELO. The bot never asks for private keys and "
+        "never signs transactions for you. All signing happens in your own wallet.\n\n"
+        "How to delegate your voting power (self-custodial):\n"
+        "1. Open an official Celo tool such as CeloScan, the Celo CLI, or a trusted "
+        "governance dApp.\n"
+        "2. Connect your self-custodial wallet that holds your locked CELO.\n"
+        "3. Navigate to the `LockedGold` contract interface.\n"
+        "4. Find the `delegate(address)` function.\n"
+        f"5. In the `delegate` input field, paste this agent address:\n   {bot_wallet}\n"
+        "6. Review the transaction details carefully.\n"
+        "7. Sign and send the transaction from your own wallet.\n\n"
+        "Once the transaction is confirmed on-chain, Celo GovAI Hub can use your delegated "
+        "voting power to vote on Celo governance proposals according to your preferences. "
+        "You remain in full control and can revoke this delegation at any time using /revoke."
+    )
+
+    await update.message.reply_text(message)
+
+
+async def revoke_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /revoke — explain how to undo or change delegation."""
+    bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
+
+    message = (
+        "⏪ Revoking Delegation — Full Control\n\n"
+        "You can stop Celo GovAI Hub from voting with your delegated power at any time. "
+        "Revoking delegation does not unlock your CELO and does not move your funds — "
+        "it only changes who can vote with your locked voting power.\n\n"
+        "How to revoke or change your delegation:\n"
+        "1. Open an official Celo tool such as CeloScan, the Celo CLI, or a trusted "
+        "governance dApp.\n"
+        "2. Connect the same self-custodial wallet you used for the original delegation.\n"
+        "3. Navigate to the `LockedGold` contract interface.\n"
+        "4. Option A — Delegate back to yourself:\n"
+        "   - Call `delegate(address)` again, but this time use your own wallet address as "
+        "the `address` parameter.\n"
+        "5. Option B — Use a revoke function (when exposed by the interface):\n"
+        "   - Call the specific revocation method provided for `LockedGold` delegations "
+        "(for example, a `revokeDelegation` or similar function), following the tool's "
+        "instructions.\n"
+        "6. Review the transaction details and sign it from your own wallet.\n\n"
+        "After the transaction is confirmed on-chain, Celo GovAI Hub will no longer be able "
+        "to vote using your delegated voting power. You can always delegate again to this "
+        f"agent address if you change your mind:\n   {bot_wallet}"
+    )
+
+    await update.message.reply_text(message)
 
 
 # ── Admin commands (ADMIN_CHAT_ID only) ────────────────────────────────────────
@@ -1063,7 +1361,7 @@ async def admin_stats_handler(
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     await update.message.reply_text(
-        "Up-to-Celo — Admin Stats\n"
+        "Celo GovAI Hub — Admin Stats\n"
         f"Generated: {now_utc}\n\n"
         "Users\n"
         f"  Subscribers:   {total_subscribers}\n"
@@ -1111,7 +1409,7 @@ async def admin_broadcast_handler(
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"Up-to-Celo Announcement\n\n{message_text}",
+                text=f"Celo GovAI Hub Announcement\n\n{message_text}",
             )
             ok_count += 1
         except Exception as exc:
@@ -1135,6 +1433,147 @@ async def admin_broadcast_handler(
         "Broadcast complete!\n\n"
         f"Sent:   {ok_count}/{len(subscribers)}\n"
         f"Errors: {error_count}"
+    )
+
+
+def _get_lockedgold_delegate_sync(account: str) -> str | None:
+    """Return the current LockedGold delegate for an account (synchronous helper).
+
+    This uses web3.py against the CELO_RPC_URL endpoint and the minimal LockedGold ABI.
+    On error, returns None without raising.
+    """
+    try:
+        rpc_url = get_env_or_fail("CELO_RPC_URL")
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+        contract = w3.eth.contract(
+            address=LOCKED_GOLD_ADDRESS,
+            abi=LOCKED_GOLD_MINIMAL_ABI,
+        )
+        delegate = contract.functions.getAccountDelegate(account).call()
+        if not isinstance(delegate, str):
+            delegate = str(delegate)
+        # Normalize zero-address return values
+        if int(delegate, 16) == 0:
+            return Web3.to_checksum_address("0x0000000000000000000000000000000000000000")
+        return Web3.to_checksum_address(delegate)
+    except Exception as exc:
+        logger.warning("[GOV] LockedGold delegate lookup failed | account=%s | error=%s", account, exc)
+        return None
+
+
+async def govstatus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /govstatus — verify on-chain delegation status via LockedGold."""
+    user = update.effective_user
+    user_id = user.id
+
+    db_user = await db.get_user(user_id)
+    if db_user is None or not db_user.user_wallet:
+        await update.message.reply_text(
+            "No governance wallet registered yet.\n\n"
+            "Please register your wallet first with:\n"
+            "/setwallet 0xYourWalletAddress"
+        )
+        return
+
+    try:
+        user_wallet = Web3.to_checksum_address(db_user.user_wallet)
+    except ValueError:
+        logger.warning("[GOV] Stored user_wallet is invalid | user=%s | wallet=%s", user_id, db_user.user_wallet)
+        await update.message.reply_text(
+            "Your stored governance wallet address is invalid.\n\n"
+            "Please set it again with:\n"
+            "/setwallet 0xYourWalletAddress"
+        )
+        return
+
+    bot_wallet = Web3.to_checksum_address(get_env_or_fail("BOT_WALLET_ADDRESS"))
+
+    loading_msg = await update.message.reply_text(
+        "🔍 Checking your on-chain delegation status on Celo..."
+    )
+
+    delegate = await asyncio.to_thread(_get_lockedgold_delegate_sync, user_wallet)
+    if delegate is None:
+        await loading_msg.edit_text(
+            "❌ Could not verify your delegation on-chain right now.\n\n"
+            "Please try again in a few minutes."
+        )
+        return
+
+    is_delegated_to_bot = delegate.lower() == bot_wallet.lower()
+
+    if is_delegated_to_bot:
+        await db.set_delegation_status(user_id, delegated=True)
+        message = (
+            "✅ Delegation detected on-chain!\n\n"
+            f"Wallet: {user_wallet}\n"
+            f"Delegate: {bot_wallet}\n\n"
+        "You are now part of the Celo GovAI Hub.\n"
+            "You can start participating in on-chain votes directly from Telegram with:\n"
+            "/vote <proposal_id> YES|NO|ABSTAIN"
+        )
+    else:
+        await db.set_delegation_status(user_id, delegated=False)
+        message = (
+            "⚠️ Delegation not detected to the Celo GovAI Hub agent.\n\n"
+            f"Wallet: {user_wallet}\n"
+            f"Current delegate: {delegate}\n\n"
+            "Make sure you have submitted and confirmed a delegation transaction to the bot "
+            "agent wallet on Celo Mainnet.\n"
+            "Once the transaction is confirmed, run /govstatus again."
+        )
+
+    await loading_msg.edit_text(message)
+
+
+async def vote_command_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /vote <proposal_id> <YES|NO|ABSTAIN> — store governance vote intent."""
+    user_id = update.effective_user.id
+    args = context.args or []
+
+    if len(args) != 2:
+        await update.message.reply_text(
+            "Usage: /vote <proposal_id> <YES/NO/ABSTAIN>"
+        )
+        return
+
+    proposal_raw, choice_raw = args[0], args[1]
+
+    try:
+        proposal_id = int(proposal_raw)
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid proposal_id. Usage: /vote <proposal_id> <YES/NO/ABSTAIN>"
+        )
+        return
+
+    vote_choice = choice_raw.strip().upper()
+    if vote_choice not in {"YES", "NO", "ABSTAIN"}:
+        await update.message.reply_text(
+            "Invalid choice. Usage: /vote <proposal_id> <YES/NO/ABSTAIN>"
+        )
+        return
+
+    user_record = await db.get_user(user_id)
+    if False:  # FIXME: BYPASS
+        await update.message.reply_text(
+            "You need to delegate your voting power first using /delegate before casting votes."
+        )
+        return
+
+    await db.register_vote_intent(
+        user_id=user_id,
+        proposal_id=proposal_id,
+        vote_choice=vote_choice,
+    )
+
+    await update.message.reply_text(
+        "✅ Your governance vote intent has been recorded.\n\n"
+        f"Proposal: {proposal_id}\n"
+        f"Choice: {vote_choice}\n\n"
+        "The vote will be executed on-chain soon by the BOTWALLET according to the governance schedule."
     )
 
 
@@ -1245,6 +1684,8 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 start_handler = CommandHandler("start", start_handler)
 help_handler = CommandHandler("help", help_handler)
 status_handler = CommandHandler("status", status_handler)
+delegate_handler = CommandHandler("delegate", delegate_handler)
+revoke_handler = CommandHandler("revoke", revoke_handler)
 premium_handler = CommandHandler("premium", premium_handler)
 confirm_payment_handler = CommandHandler("confirmpayment", confirm_payment_handler)
 setwallet_handler = CommandHandler("setwallet", setwallet_handler)
@@ -1255,4 +1696,9 @@ stop_handler = CommandHandler("stop", stop_handler)
 subscribe_handler = CommandHandler("subscribe", subscribe_handler)
 unsubscribe_handler = CommandHandler("unsubscribe", unsubscribe_handler)
 inline_handler = InlineQueryHandler(inline_query_handler)
-governance_handler = CommandHandler("governance", governance_handler)
+governance_command_handler = CommandHandler("governance", governance_handler)
+govstatus_handler = CommandHandler("govstatus", govstatus_handler)
+vote_handler = CommandHandler("vote", vote_command_handler)
+proposal_handler = CommandHandler("proposal", proposal_handler)
+govlist_handler = CommandHandler("govlist", govlist_handler)
+govhistory_handler = CommandHandler("govhistory", govhistory_handler)

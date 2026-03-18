@@ -1,5 +1,5 @@
 # src/utils/logger.py
-# Up-to-Celo — central logging (P39: dual mode via LOG_TO_FILE)
+# Celo GovAI Hub — central logging (P39: dual mode via LOG_TO_FILE)
 #
 # Production (Render): LOG_TO_FILE=false — console only (ephemeral filesystem).
 # Development (local): LOG_TO_FILE=true — console + RotatingFileHandler to data/logs/.
@@ -12,7 +12,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
-def setup_logger(name: str = "up-to-celo") -> logging.Logger:
+def setup_logger(name: str = "celo-govai-hub") -> logging.Logger:
     """Configure and return the main application logger.
 
     Production: console only (INFO+). Development: console + bot.log (DEBUG+)

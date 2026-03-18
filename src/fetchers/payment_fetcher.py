@@ -1,5 +1,5 @@
 # src/fetchers/payment_fetcher.py
-# Up-to-Celo — cUSD payment verifier via Celo RPC (web3.py)
+# Celo GovAI Hub — cUSD payment verifier via Celo RPC (web3.py)
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from web3.types import TxReceipt
 
 logger = logging.getLogger(__name__)
 
-# Minimal ERC-20 ABI — only the Transfer event is needed for log decoding
-_ERC20_ABI = [
+# Minimal cUSD ERC-20 ABI — only the Transfer event is needed for log decoding
+CUSD_MINIMAL_ABI = [
     {
         "anonymous": False,
         "inputs": [
@@ -39,14 +39,18 @@ class PaymentFetcher:
     event loop is never blocked.
     """
 
-    CUSD_CONTRACT: str = "0x765DE816845861e75A25fCA122bb6898B8B1282a"
-    TRANSFER_TOPIC: str = Web3.keccak(text="Transfer(address,address,uint256)").hex()
+    CUSD_CONTRACT: str = Web3.to_checksum_address(
+        "0x765DE816845861e75A25fCA122bb6898B8B1282a"
+    )
+    TRANSFER_TOPIC: str = Web3.keccak(
+        text="Transfer(address,address,uint256)"
+    ).hex()
 
     def __init__(self, rpc_url: str = _CELO_RPC) -> None:
         self._w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
         self._contract = self._w3.eth.contract(
-            address=Web3.to_checksum_address(self.CUSD_CONTRACT),
-            abi=_ERC20_ABI,
+            address=self.CUSD_CONTRACT,
+            abi=CUSD_MINIMAL_ABI,
         )
 
     # ── internal helpers ───────────────────────────────────────────────────────
@@ -122,8 +126,7 @@ class PaymentFetcher:
             if not topics:
                 continue
             first_topic = topics[0].hex() if hasattr(topics[0], "hex") else str(topics[0])
-            if first_topic.lower() != ("0x" + self.TRANSFER_TOPIC).lower() and \
-               first_topic.lower() != self.TRANSFER_TOPIC.lower():
+            if first_topic.lower() != self.TRANSFER_TOPIC.lower():
                 continue
             transfer_log = log
             break
@@ -177,9 +180,9 @@ class PaymentFetcher:
         def _get_logs():
             return self._w3.eth.get_logs(
                 {
-                    "address": Web3.to_checksum_address(self.CUSD_CONTRACT),
+                    "address": self.CUSD_CONTRACT,
                     "topics": [
-                        "0x" + self.TRANSFER_TOPIC,
+                        self.TRANSFER_TOPIC,
                         None,
                         padded_to,
                     ],

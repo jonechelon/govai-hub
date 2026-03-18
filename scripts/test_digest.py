@@ -111,7 +111,7 @@ async def run_test(send_to_admin: bool = False) -> None:
         print(line)
         report_lines.append(line)
 
-    log("Up-to-Celo — Digest Test")
+    log("Celo GovAI Hub — Digest Test")
     log(f"Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     log(_format_separator("="))
 
@@ -298,7 +298,7 @@ async def run_test(send_to_admin: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Up-to-Celo — Manual digest test script",
+        description="Celo GovAI Hub — Manual digest test script",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"

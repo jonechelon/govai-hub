@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -46,12 +47,307 @@ GOVERNANCE_ABI_MINIMAL: list[dict[str, Any]] = [
         "name": "ProposalDequeued",
         "type": "event",
     },
+    # View functions for proposal list status (celocli governance:list equivalent).
+    # Note: names match the on-chain Governance contract interface on Celo.
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "getQueue",
+        "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}],
+        "payable": False,
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "getDequeue",
+        "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}],
+        "payable": False,
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # View function to resolve the true proposal stage.
+    # Returns an enum-like uint8 (implementation-dependent).
+    {
+        "constant": True,
+        "inputs": [
+            {"internalType": "uint256", "name": "proposalId", "type": "uint256"}
+        ],
+        "name": "getProposalStage",
+        "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+        "payable": False,
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # View function: reads proposal data directly from contract storage.
+    # Returns (proposer, deposit, timestamp, transactionCount, descriptionUrl,
+    #          networkWeight, approved).
+    # Reverts with ContractLogicError when proposalId does not exist.
+    {
+        "constant": True,
+        "inputs": [
+            {"internalType": "uint256", "name": "proposalId", "type": "uint256"}
+        ],
+        "name": "getProposal",
+        "outputs": [
+            {"internalType": "address", "name": "proposer", "type": "address"},
+            {"internalType": "uint256", "name": "deposit", "type": "uint256"},
+            {"internalType": "uint256", "name": "timestamp", "type": "uint256"},
+            {"internalType": "uint256", "name": "transactionCount", "type": "uint256"},
+            {"internalType": "string", "name": "descriptionUrl", "type": "string"},
+            {"internalType": "uint256", "name": "networkWeight", "type": "uint256"},
+            {"internalType": "bool", "name": "approved", "type": "bool"},
+        ],
+        "payable": False,
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 CACHE_PATH = Path("data/cache/governance_last_block.json")
 BLOCKS_LOOKBACK = 1800  # ~5h on Celo (~2s/block)
 RPC_TIMEOUT = 10  # seconds
 RETRY_DELAYS = [2, 4, 8]  # backoff in seconds
+
+
+def _fetch_proposal_url_sync(proposal_id: int) -> str | None:
+    """Read a proposal's descriptionUrl directly from the Celo Governance contract.
+
+    This is a synchronous helper meant to be called via asyncio.to_thread.
+    It calls getProposal(proposalId) and extracts the descriptionUrl field.
+    Returns None when the proposal does not exist (contract reverts) or on any
+    RPC error, so callers can safely treat None as "not found".
+
+    Args:
+        proposal_id: On-chain integer identifier of the governance proposal.
+
+    Returns:
+        The descriptionUrl string if found and non-empty, otherwise None.
+    """
+    try:
+        rpc_url = get_env_or_fail("CELO_RPC_URL")
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": RPC_TIMEOUT}))
+        contract = w3.eth.contract(
+            address=GOVERNANCE_ADDRESS, abi=GOVERNANCE_ABI_MINIMAL
+        )
+        # Returns tuple: (proposer, deposit, timestamp, transactionCount,
+        #                 descriptionUrl, networkWeight, approved)
+        result = contract.functions.getProposal(proposal_id).call()
+        description_url: str = result[4]  # index 4 = descriptionUrl
+        if description_url and description_url.strip():
+            return description_url.strip()
+        return None
+    except ContractLogicError:
+        # Contract reverts when proposalId does not exist on-chain.
+        logger.info(
+            "[GOVERNANCE] getProposal reverted — proposal #%s not found on-chain",
+            proposal_id,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "[GOVERNANCE] getProposal RPC error | proposal_id=%s | error=%s",
+            proposal_id,
+            exc,
+        )
+        return None
+
+
+async def get_proposal_url_onchain(proposal_id: int) -> str | None:
+    """Async wrapper: fetch proposal descriptionUrl from the Celo Governance contract.
+
+    Runs the synchronous web3.py call in a thread pool so it never blocks the
+    event loop. Returns None when the proposal does not exist or the RPC fails.
+
+    Args:
+        proposal_id: On-chain integer identifier of the governance proposal.
+
+    Returns:
+        The descriptionUrl string if found and non-empty, otherwise None.
+    """
+    return await asyncio.to_thread(_fetch_proposal_url_sync, proposal_id)
+
+
+def _get_active_proposals_onchain_sync(w3: Web3, contract_address: str) -> dict[str, list[int]]:
+    """Return queued and dequeued proposal IDs from the Governance contract (sync helper).
+
+    Args:
+        w3: Initialized Web3 instance (HTTPProvider recommended).
+        contract_address: Governance contract address (0x...).
+
+    Returns:
+        Dict with integer proposal IDs grouped by status:
+        {"queued": [...], "dequeued": [...]}.
+        Returns empty lists on any failure.
+    """
+    try:
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=GOVERNANCE_ABI_MINIMAL,
+        )
+        queued_raw = contract.functions.getQueue().call()
+        dequeued_raw = contract.functions.getDequeue().call()
+
+        queued = [int(x) for x in (queued_raw or [])]
+        dequeued = [int(x) for x in (dequeued_raw or [])]
+        return {"queued": queued, "dequeued": dequeued}
+    except ContractLogicError as exc:
+        logger.warning("[GOVERNANCE] getQueue/getDequeue reverted | error=%s", exc)
+        return {"queued": [], "dequeued": []}
+    except Exception as exc:
+        logger.warning("[GOVERNANCE] Active proposals RPC error | error=%s", exc)
+        return {"queued": [], "dequeued": []}
+
+
+def _get_proposal_stage_sync(w3: Web3, contract_address: str, proposal_id: int) -> int | None:
+    """Fetch the proposal stage from the Governance contract (sync helper).
+
+    Args:
+        w3: Initialized Web3 instance.
+        contract_address: Governance contract address (0x...).
+        proposal_id: Proposal id to query.
+
+    Returns:
+        Integer stage value, or None if the call fails / proposal does not exist.
+    """
+    try:
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=GOVERNANCE_ABI_MINIMAL,
+        )
+        stage = contract.functions.getProposalStage(int(proposal_id)).call()
+        return int(stage)
+    except ContractLogicError:
+        return None
+    except Exception as exc:
+        logger.debug(
+            "[GOVERNANCE] getProposalStage failed | proposal_id=%s | error=%s",
+            proposal_id,
+            exc,
+        )
+        return None
+
+
+def _stage_to_active_bucket(stage: int | None) -> str | None:
+    """Map the Celo Governance ProposalStage enum to active buckets only.
+
+    Active stages:
+      1 = Queued
+      2 = Approval (treated as Queued)
+      3 = Active (Voting)
+
+    Ignored (history / not actionable):
+      0 = None
+      4 = Execution
+    """
+    if stage in {1, 2}:
+        return "Queued"
+    if stage == 3:
+        return "Active"
+    return None
+
+
+async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[str, list[int]]:
+    """Get an active-only governance dashboard from on-chain state.
+
+    Steps:
+      1. Read raw arrays from getQueue() and getDequeue().
+      2. Remove zeros (0) and deduplicate proposal ids.
+      3. Resolve true stage for each id via getProposalStage(id) in parallel.
+      4. Keep ONLY actionable stages:
+         - 1/2 -> Queued
+         - 3   -> Active
+         Ignore stage 0 and 4 (history / not actionable).
+      5. Sort each bucket desc.
+
+    Args:
+        w3: Initialized Web3 instance (HTTPProvider recommended).
+        contract_address: Governance contract address (0x...).
+
+    Returns:
+        Dict with integer proposal IDs grouped by status:
+        {"Queued": [...], "Active": [...]}.
+        Returns empty lists on failure.
+    """
+    raw = await asyncio.to_thread(_get_active_proposals_onchain_sync, w3, contract_address)
+    queued_raw = raw.get("queued", [])
+    dequeued_raw = raw.get("dequeued", [])
+
+    queued_set = {int(x) for x in queued_raw if int(x) != 0}
+    dequeued_set = {int(x) for x in dequeued_raw if int(x) != 0}
+    all_ids = sorted(queued_set | dequeued_set, reverse=True)
+
+    if not all_ids:
+        return {"Queued": [], "Active": []}
+
+    async def _fetch_bucket(pid: int) -> tuple[int, str | None]:
+        stage = await asyncio.to_thread(_get_proposal_stage_sync, w3, contract_address, pid)
+        bucket = _stage_to_active_bucket(stage)
+        return pid, bucket
+
+    try:
+        pairs = await asyncio.gather(*[_fetch_bucket(pid) for pid in all_ids])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[GOVERNANCE] Failed to resolve proposal stages | error=%s", exc)
+        return {"Queued": [], "Active": []}
+
+    buckets: dict[str, list[int]] = {"Queued": [], "Active": []}
+
+    for pid, bucket in pairs:
+        if bucket is None:
+            continue
+        buckets.setdefault(bucket, []).append(int(pid))
+
+    # Sort buckets and cap inactive ones
+    for key in ("Queued", "Active"):
+        buckets[key] = sorted(set(buckets.get(key, [])), reverse=True)
+
+    return buckets
+
+
+async def get_historical_proposals_onchain(w3: Web3, contract_address: str) -> list[int]:
+    """Return recently concluded governance proposal IDs from on-chain state.
+
+    This is a lightweight best-effort history view built from the IDs present in
+    getQueue() and getDequeue(). The Governance contract can keep old IDs in these
+    arrays, so we filter by stage and keep only non-active proposals.
+
+    Active stages are {1, 2, 3}. Any other stage value is treated as concluded.
+
+    Args:
+        w3: Initialized Web3 instance (HTTPProvider recommended).
+        contract_address: Governance contract address (0x...).
+
+    Returns:
+        List of up to 40 proposal IDs (desc), excluding active stages.
+        Returns [] on failure.
+    """
+    raw = await asyncio.to_thread(_get_active_proposals_onchain_sync, w3, contract_address)
+    queued_raw = raw.get("queued", [])
+    dequeued_raw = raw.get("dequeued", [])
+
+    all_ids = sorted(
+        {int(x) for x in (queued_raw or []) + (dequeued_raw or []) if int(x) != 0},
+        reverse=True,
+    )
+    if not all_ids:
+        return []
+
+    async def _is_concluded(pid: int) -> tuple[int, bool]:
+        stage = await asyncio.to_thread(_get_proposal_stage_sync, w3, contract_address, pid)
+        is_active = stage in {1, 2, 3}
+        return pid, not is_active
+
+    try:
+        pairs = await asyncio.gather(*[_is_concluded(pid) for pid in all_ids])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[GOVERNANCE] Failed to resolve proposal stages for history | error=%s", exc)
+        return []
+
+    concluded_ids = [pid for pid, concluded in pairs if concluded]
+    concluded_ids = sorted(set(concluded_ids), reverse=True)
+    return concluded_ids[:40]
 
 
 class GovernanceFetcher:

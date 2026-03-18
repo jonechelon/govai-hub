@@ -1,4 +1,4 @@
-# render.yaml — Render.com deployment manifest for Up-to-Celo
+# render.yaml — Render.com deployment manifest for Celo GovAI Hub
 # Database: Neon PostgreSQL (external) — no disk mount needed
 # Docs: https://render.com/docs/blueprint-spec
 

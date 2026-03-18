@@ -1,5 +1,5 @@
 # src/bot/callbacks.py
-# Up-to-Celo — central callback router for inline keyboards (P8)
+# Celo GovAI Hub — central callback router for inline keyboards (P8)
 
 from __future__ import annotations
 
@@ -10,7 +10,16 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
-from src.bot.handlers import HELP_MESSAGE, PREMIUM_MESSAGE
+from web3 import Web3
+
+from src.bot.handlers import (
+    HELP_MESSAGE,
+    PLAN_30D_CUSD,
+    PLAN_7D_CUSD,
+    PREMIUM_MESSAGE,
+    WELCOME_MESSAGE,
+    governance_handler,
+)
 from src.bot.keyboards import (
     CATEGORY_DISPLAY,
     get_category_keyboard,
@@ -21,12 +30,18 @@ from src.bot.keyboards import (
     get_premium_keyboard,
     get_premium_plan_keyboard,
     get_settings_keyboard,
+    governance_keyboard,
 )
 from src.database.manager import db
 from src.database.models import APPS_AVAILABLE
 from src.ai.digest_generator import digest_generator
 from src.utils.cache_manager import cache
 from src.utils.env_validator import get_env_or_fail
+from src.fetchers.governance_fetcher import (
+    GOVERNANCE_ADDRESS,
+    get_active_proposals_onchain,
+    get_historical_proposals_onchain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +59,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         if data == "noop":
             return  # silently ignore category header buttons
+        elif data == "start":
+            await _handle_start(query)
         elif data == "digest:latest":
             await _handle_digest_latest(query, context, user_id)
         elif data.startswith("details:"):
@@ -78,6 +95,14 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _handle_back(query, user_id)
         elif data == "help:open":
             await _handle_help_open(query)
+        elif data == "governance:open":
+            await governance_handler(update, context)
+        elif data == "govlist":
+            await _handle_govlist(query)
+        elif data == "govhistory":
+            await _handle_govhistory(query)
+        elif data == "govstatus":
+            await _handle_govstatus(query, user_id)
         elif data == "resubscribe":
             await _handle_resubscribe(query, user_id)
         else:
@@ -98,6 +123,25 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("Error loading digest", show_alert=True)
         except Exception:  # noqa: BLE001
             # Best-effort: avoid raising inside the error handler itself.
+            pass
+
+
+async def _handle_start(query) -> None:
+    """Return to the main menu screen."""
+    try:
+        await query.edit_message_text(
+            WELCOME_MESSAGE,
+            reply_markup=get_main_keyboard(),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except BadRequest:
+        try:
+            await query.message.reply_text(
+                WELCOME_MESSAGE,
+                reply_markup=get_main_keyboard(),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:  # noqa: BLE001
             pass
 
 
@@ -388,7 +432,7 @@ async def _handle_settings_open(
     """Open root settings menu with 4 category buttons."""
     user_apps = await db.get_user_apps_by_category(user_id)
     text = (
-        "⚙️ Up-to-Celo — Select Your Apps\n\n"
+        "⚙️ Celo GovAI Hub — Select Your Apps\n\n"
         "Tap a category to manage its apps.\n"
         "✅ = all enabled  ☑️ = some enabled  ☐ = none"
     )
@@ -420,8 +464,9 @@ async def _handle_settings_close(query) -> None:
     """Close settings and show save confirmation."""
     try:
         await query.edit_message_text(
-            text="✅ <b>Settings saved.</b>\nYour digest will reflect your app selection.",
+            text="✅ <b>Settings saved.</b>\n\nYour digest will reflect your app selection.",
             parse_mode=ParseMode.HTML,
+            reply_markup=get_main_keyboard(),
         )
     except BadRequest:
         pass
@@ -493,7 +538,7 @@ async def _handle_premium_open(
 async def _handle_premium_plan(query, user_id: int, days: int) -> None:
     """Show plan-specific instructions and wallet status after user selects 7d or 30d."""
     bot_wallet = get_env_or_fail("BOT_WALLET_ADDRESS")
-    amount = 7 if days == 7 else 20
+    amount = PLAN_7D_CUSD if days == 7 else PLAN_30D_CUSD
     label = f"{days}-day Premium"
     user_wallet = await db.get_wallet(user_id)
 
@@ -501,20 +546,20 @@ async def _handle_premium_plan(query, user_id: int, days: int) -> None:
         wallet_line = (
             f"Your registered wallet:\n"
             f"{user_wallet}\n\n"
-            f"Just send {amount} CELO to the address below — "
-            f"Premium activates automatically in ~60s."
+            f"Just send {amount:.2f} cUSD to the address below — "
+            f"Premium activates automatically in ~60s after confirmation."
         )
     else:
         wallet_line = (
             f"No wallet registered yet.\n"
             f"Use /setwallet 0xYourWallet for automatic activation.\n\n"
-            f"Or send {amount} CELO and use /confirmpayment 0xTxHash."
+            f"Or send {amount:.2f} cUSD and use /confirmpayment 0xTxHash."
         )
 
     try:
         await query.edit_message_text(
             f"{label} selected\n\n"
-            f"Amount: {amount} CELO\n\n"
+            f"Amount: {amount:.2f} cUSD\n\n"
             f"Send to:\n"
             f"{bot_wallet}\n\n"
             f"{wallet_line}\n\n"
@@ -552,10 +597,10 @@ async def _handle_premium_back(query, user_id: int) -> None:
 
     try:
         await query.edit_message_text(
-            f"Premium plans — Up-to-Celo\n\n"
-            f"7-day Premium  — 7 CELO\n"
-            f"30-day Premium — 20 CELO\n\n"
-            f"Send CELO to:\n"
+            f"Premium plans — Celo GovAI Hub\n\n"
+            f"7-day Premium  — {PLAN_7D_CUSD:.2f} cUSD\n"
+            f"30-day Premium — {PLAN_30D_CUSD:.2f} cUSD\n\n"
+            f"Send cUSD stablecoin to:\n"
             f"{bot_wallet}\n\n"
             f"Send from a personal wallet (MiniPay, Valora, MetaMask).\n"
             f"Exchanges use intermediate addresses and won't be detected.\n\n"
@@ -596,7 +641,103 @@ async def _handle_resubscribe(query, user_id: int) -> None:
 
 async def _handle_help_open(query) -> None:
     """Show help message inline."""
-    await query.message.reply_text(HELP_MESSAGE)
+    await query.message.reply_text(HELP_MESSAGE, reply_markup=get_main_keyboard())
+
+
+async def _handle_govlist(query) -> None:
+    """Fetch and display active governance proposals (Queued + Active)."""
+    rpc_url = get_env_or_fail("CELO_RPC_URL")
+    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+
+    try:
+        await query.edit_message_text(
+            "⏳ Fetching active governance proposals from the Celo network...",
+        )
+    except BadRequest:
+        pass
+
+    result = await get_active_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
+    queued = result.get("Queued", [])
+    active = result.get("Active", [])
+
+    queued_str = ", ".join(str(x) for x in queued) if queued else "None"
+    active_str = ", ".join(str(x) for x in active) if active else "None"
+
+    text = (
+        "🏛️ <b>Celo Governance — Active Proposals</b>\n\n"
+        f"⏳ <b>Queued:</b> {queued_str}\n"
+        f"🗳️ <b>Active Voting:</b> {active_str}\n"
+        "\n<i>Tip: use <code>/proposal &lt;id&gt;</code> for an AI summary.</i>"
+    )
+
+    try:
+        await query.edit_message_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=governance_keyboard(),
+        )
+    except BadRequest:
+        pass
+
+
+async def _handle_govhistory(query) -> None:
+    """Fetch and display recent governance history proposal IDs."""
+    rpc_url = get_env_or_fail("CELO_RPC_URL")
+    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+
+    try:
+        await query.edit_message_text(
+            "⏳ Fetching governance history from the Celo network...",
+        )
+    except BadRequest:
+        pass
+
+    proposal_ids = await get_historical_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
+    ids_str = ", ".join(str(x) for x in proposal_ids) if proposal_ids else "None"
+
+    text = (
+        "📚 <b>Celo Governance — History</b>\n\n"
+        "<i>Recent concluded proposals (Executed, Rejected, or Expired):</i>\n"
+        f"{ids_str}\n\n"
+        "<i>Use <code>/proposal &lt;id&gt;</code> for an AI summary.</i>"
+    )
+
+    try:
+        await query.edit_message_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=governance_keyboard(),
+        )
+    except BadRequest:
+        pass
+
+
+async def _handle_govstatus(query, user_id: int) -> None:
+    """Explain next steps for delegation status checks and delegation."""
+    user_wallet = await db.get_wallet(user_id)
+    wallet_line = (
+        f"Registered wallet: <code>{user_wallet}</code>\n\n"
+        if user_wallet
+        else "No wallet registered yet.\n\nUse:\n<code>/setwallet 0xYourWalletAddress</code>\n\n"
+    )
+
+    text = (
+        "🧾 <b>My Status & Delegate</b>\n\n"
+        f"{wallet_line}"
+        "Next steps:\n"
+        "- Check status: <code>/govstatus</code>\n"
+        "- Delegation guide: <code>/delegate</code>\n\n"
+        "<i>Note: delegation is self-custodial. You never share private keys.</i>"
+    )
+
+    try:
+        await query.edit_message_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=governance_keyboard(),
+        )
+    except BadRequest:
+        pass
 
 
 # ── export for app.py ──────────────────────────────────────────────────────────
