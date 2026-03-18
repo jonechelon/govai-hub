@@ -85,11 +85,14 @@ celo_rpc:
   primary: "https://forno.celo.org"
   fallback: "https://rpc.ankr.com/celo"
   timeout_seconds: 10
+  # Alfajores testnet — swap primary/fallback below and use identity_registry commented above
+  # testnet: "https://alfajores-forno.celo-testnet.org"   # chain_id: 44787
 
 celo_contracts:
   cusd:  "0x765DE816845861e75A25fCA122bb6898B8B1282a"
   ceur:  "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73"
   creal: "0xe8537a3d056DA446677B9E9d6c5dB704EaAb4787"
+  celo:  "0x471EcE3750Da237f93B8E339c536989b8978a438"  # ✅ CELO ERC-20 CeloScan
 
 coingecko:
   celo_id: "celo"
@@ -187,16 +190,20 @@ database:
   url: "sqlite+aiosqlite:///data/uptocelo.db"
 
 payment:
+  celo_contract: "0x471EcE3750Da237f93B8E339c536989b8978a438"
   cusd_contract: "0x765DE816845861e75A25fCA122bb6898B8B1282a"
-  min_cusd_weekly: 0.49      # minimum for 7-day premium (margin for gas fees)
-  min_cusd_monthly: 1.49     # minimum for 30-day premium
+  min_celo_weekly: 0.3       # ~$0.50 USD equiv. 2026-03 + gas margin
+  min_celo_monthly: 1.0      # ~$1.50 USD equiv.
   days_weekly: 7
   days_monthly: 30
 
 erc8004:
-  # ⚠️ Confirm address on celoscan.io before running register_agent.py
+  # Celo Mainnet — ERC-8004 Identity Registry (verified on celoscan.io)
+  # https://celoscan.io/address/0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
   identity_registry: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+  # Alfajores testnet equivalent (use with celo_rpc.testnet below):
+  # identity_registry: "0x8004A818BFB912233c491871b3d84c89A494BD9e"
   agent_name: "Up-to-Celo"
-  agent_description: "AI-powered Telegram bot delivering daily Celo blockchain digests. Monitors MiniPay, Valora, Ubeswap, Mento, ImpactMarket and more. Premium subscriptions paid in cUSD on Celo."
+  agent_description: "AI-powered Telegram bot delivering daily Celo blockchain digests. Monitors MiniPay, Valora, Ubeswap, Mento, ImpactMarket and more. Premium subscriptions paid in CELO"
   agent_endpoint: "https://t.me/uptocelo_bot"
   chain_id: 42220

@@ -145,41 +145,22 @@ def admin_only(handler):
         return await handler(update, context)
     return wrapper
 
-WELCOME_MESSAGE = (
-    "Welcome to Up-to-Celo! 🌿\n\n"
+_MAIN_MESSAGE = (
+    "Welcome to Up-to-Celo AI! 🟡\n\n"
     "Stay up-to-date on the Celo blockchain with daily AI-powered digests.\n"
     "Covering: network updates, DeFi, ReFi, governance & live on-chain data.\n\n"
     "📰 /digest — Get today's Celo digest\n"
     "🤖 /ask — Chat with the Celo AI agent\n"
+    "   Ex: /ask What's new in Ubeswap?\n"
+    "   Ex: /ask How to vote on governance?\n"
+    "🗳️ /governance — Latest Celo proposals\n"
     "⚙️ /settings — Customize your feed\n"
-    "⭐ /premium — Upgrade with CELO\n\n"
+    "⭐️ /premium — Upgrade with CELO\n\n"
     "→ Start with /digest"
 )
 
-HELP_MESSAGE = (
-    "Up-to-Celo — Command Guide\n\n"
-    "DIGEST\n"
-    "/digest — Generate your personalized daily digest\n"
-    "/settings — Select which apps to include\n\n"
-    "AI ASSISTANT\n"
-    "/ask [question] — Ask anything about Celo (conversational)\n"
-    "/stop — End the current conversation session\n\n"
-    "PREMIUM\n"
-    "/premium — View plans and upgrade with CELO\n"
-    "/setwallet [address] — Register wallet for automatic Premium detection\n"
-    "/confirmpayment [tx_hash] — Confirm CELO payment (exchange fallback)\n"
-    "/status — Check your current plan and next digest time\n\n"
-    "OTHER\n"
-    "/start — Welcome message and main menu\n"
-    "/subscribe   — Subscribe to daily digest\n"
-    "/unsubscribe — Unsubscribe from daily digest\n"
-    "/help — Show this guide\n\n"
-    "TIPS\n"
-    "Free plan: 3 AI queries/day\n"
-    "Premium: unlimited queries\n"
-    "After /ask, reply freely without typing /ask again\n"
-    "Digest is personalized based on your /settings\n"
-)
+WELCOME_MESSAGE = _MAIN_MESSAGE
+HELP_MESSAGE = _MAIN_MESSAGE
 
 PREMIUM_MESSAGE = (
     "Premium — Up-to-Celo\n\n"
@@ -217,7 +198,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command."""
-    await update.message.reply_text(HELP_MESSAGE)
+    await update.message.reply_text(HELP_MESSAGE, reply_markup=get_main_keyboard())
 
 
 # ── /subscribe / /unsubscribe ──────────────────────────────────────────────────
