@@ -1,5 +1,5 @@
 # src/bot/app.py
-# Celo GovAI Hub — bot application factory and main entrypoint
+# Up-to-Celo — bot application factory and main entrypoint
 
 from __future__ import annotations
 
@@ -27,19 +27,13 @@ from src.bot.handlers import (
     admin_stats_handler,
     admin_broadcast_handler,
     admin_digest_now_handler,
-    delegate_handler,
-    revoke_handler,
-    govstatus_handler,
-    vote_handler,
-    proposal_handler,
-    govlist_handler,
-    govhistory_handler,
     ask_handler,
     confirm_payment_handler,
     digest_handler,
     free_text_handler,
     help_handler,
     inline_handler,
+    governance_handler,
     premium_handler,
     settings_handler,
     setwallet_handler,
@@ -48,7 +42,6 @@ from src.bot.handlers import (
     stop_handler,
     subscribe_handler,
     unsubscribe_handler,
-    governance_handler,
 )
 from src.database.manager import DatabaseManager
 from src.scheduler.scheduler import scheduler
@@ -142,14 +135,12 @@ def build_application() -> Application:
     Returns:
         Configured Application instance (not yet running).
     """
-    # FIXME: TEMPORARY LOCAL POLLING — comment out .updater(None) so run_polling
-    # has an Updater. Revert before committing to Render (webhook mode).
     application = (
         ApplicationBuilder()
         .token(get_env_or_fail("TELEGRAM_BOT_TOKEN"))
         # Disable the built-in Updater: webhook HTTP is handled by our own
         # aiohttp server below, so PTB's internal webhook server is not needed.
-        # .updater(None)  # TEMPORARY: commented for local polling — uncomment for Render
+        .updater(None)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
         .build()
@@ -168,16 +159,7 @@ def build_application() -> Application:
     application.add_handler(unsubscribe_handler)
     application.add_handler(ask_handler)
     application.add_handler(stop_handler)
-    application.add_handler(CommandHandler("governance", governance_handler))
-
-    # Governance & Voting handlers
-    application.add_handler(delegate_handler)
-    application.add_handler(revoke_handler)
-    application.add_handler(govstatus_handler)
-    application.add_handler(vote_handler)
-    application.add_handler(proposal_handler)
-    application.add_handler(govlist_handler)
-    application.add_handler(govhistory_handler)
+    application.add_handler(governance_handler)
 
     # Admin-only commands (ADMIN_CHAT_ID)
     application.add_handler(CommandHandler("admin_stats", admin_stats_handler))
@@ -264,7 +246,7 @@ async def run_bot() -> None:
 
     async def root_handler(request: web.Request) -> web.Response:
         """Return 200 for Render's default connectivity probe on GET /."""
-        return web.Response(text="Celo GovAI Hub OK")
+        return web.Response(text="Up-to-Celo OK")
 
     aio_app.router.add_post(webhook_path, telegram_update_handler)
     aio_app.router.add_get("/health", _health_handler)
@@ -294,7 +276,7 @@ async def run_bot() -> None:
         "[STARTUP] Webhook server listening | port=%d | path=%s", port, webhook_path
     )
     logger.info("[STARTUP] Health endpoint ready | port=%d | path=/health", port)
-    logger.info("[STARTUP] Celo GovAI Hub started | version: 1.1 | mode: webhook")
+    logger.info("[STARTUP] Up-to-Celo bot started | version: 1.1 | mode: webhook")
 
     # ------------------------------------------------------------------
     # Block until SIGTERM or SIGINT is received (Render sends SIGTERM).
@@ -338,7 +320,7 @@ def main() -> None:
     get_env_or_fail("BOT_WALLET_ADDRESS")
     get_env_or_fail("BOT_WALLET_PRIVATE_KEY")
 
-    bot_name = CONFIG.get("bot", {}).get("name", "Celo GovAI Hub")
+    bot_name = CONFIG.get("bot", {}).get("name", "Up-to-Celo")
     digest_time = CONFIG.get("digest_schedule", {}).get("time", "08:30")
     digest_tz = CONFIG.get("digest_schedule", {}).get("timezone", "Europe/Madrid")
     logger.info(
@@ -346,15 +328,8 @@ def main() -> None:
     )
 
     try:
-        # -------------------------------------------------------------------------
-        # FIXME: TEMPORARY LOCAL POLLING — revert before committing to Render.
-        # Use run_polling when no tunnel (ngrok) is available locally.
-        # Production (Render) uses asyncio.run(run_bot()) with webhook + aiohttp.
-        # -------------------------------------------------------------------------
-        # asyncio.run(run_bot())
-        application = build_application()
-        application.run_polling(drop_pending_updates=True)
-        logger.info("[SHUTDOWN] Polling stopped — exiting cleanly")
+        asyncio.run(run_bot())
+        logger.info("[SHUTDOWN] Webhook server stopped — exiting cleanly")
         sys.exit(0)
 
     except KeyboardInterrupt:

@@ -1,5 +1,5 @@
 # src/scheduler/scheduler.py
-# Celo GovAI Hub — DigestScheduler (APScheduler AsyncIOScheduler, Europe/Madrid, P20)
+# Up-to-Celo — DigestScheduler (APScheduler AsyncIOScheduler, Europe/Madrid, P20)
 
 from __future__ import annotations
 
