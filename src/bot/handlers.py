@@ -33,6 +33,7 @@ from src.ai.digest_generator import digest_generator
 from src.ai.groq_client import groq_client, generate_proposal_summary
 from src.bot.keyboards import (
     get_digest_keyboard,
+    get_help_keyboard,
     get_main_keyboard,
     governance_keyboard,
     get_governance_keyboard,
@@ -205,22 +206,26 @@ WELCOME_MESSAGE = (
 
 # Kept for backward compatibility where older handlers might still reference START_MESSAGE.
 START_MESSAGE = WELCOME_MESSAGE
-HELP_MESSAGE = (
-    "Welcome to Celo GovAI Hub! 🟡\n\n"
-    "I help you stay up-to-date on the Celo blockchain with daily AI-powered digests.\n\n"
-    "Main commands:\n"
-    "📰 /digest — Get today's Celo digest\n"
-    "🤖 /ask — Chat with the Celo AI agent\n"
-    "🏛️ /governance — Governance Hub (Proposals & Voting)\n"
-    "⚙️ /settings — Customize your feed\n"
-    "⭐️ /premium — Upgrade with cUSD\n\n"
-    "Governance sub-commands:\n"
-    "🗳️ /govlist — Active proposals\n"
-    "📚 /govhistory — Voting history\n"
-    "📝 /proposal <id> — AI summary of a proposal\n"
-    "✅ /vote <id> <choice> — Vote (YES/NO/ABSTAIN)\n"
-    "🤝 /delegate — Delegate voting power (LockedGold)\n"
-    "📍 /govstatus — Check your on-chain delegation status"
+HELP_MESSAGE_TEXT = (
+    "📚 <b>Celo GovAI Hub - Command Center</b>\n\n"
+    "<b>🤖 AI & Insights</b>\n"
+    "• /ask &lt;question&gt; - Chat with the AI about the Celo ecosystem.\n"
+    "• /proposal &lt;id&gt; - Get an ELI5 AI summary of a governance proposal.\n\n"
+    "<b>🏛️ Governance & Voting</b>\n"
+    "• /governance - Open the main governance dashboard.\n"
+    "• /govlist - List active and queued proposals on-chain.\n"
+    "• /govhistory - View past governance decisions.\n"
+    "• /govstatus - Check your LockedGold balance and delegation status.\n"
+    "• /vote &lt;id&gt; &lt;YES|NO|ABSTAIN&gt; - Cast your on-chain vote.\n"
+    "• /delegate - Instructions to delegate voting power to the bot.\n"
+    "• /revoke - Instructions to revoke your delegation.\n\n"
+    "<b>💼 Account & Settings</b>\n"
+    "• /setwallet &lt;address&gt; - Link your Celo wallet.\n"
+    "• /premium - Upgrade your tier using cUSD.\n"
+    "• /confirmpayment - Verify your premium payment on-chain.\n\n"
+    "<b>⚙️ General</b>\n"
+    "• /start - Show the main menu.\n"
+    "• /help - Display this guide."
 )
 
 GOVERNANCE_HUB_MESSAGE = (
@@ -276,7 +281,11 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command."""
-    await update.message.reply_text(HELP_MESSAGE, reply_markup=get_main_keyboard())
+    await update.message.reply_text(
+        HELP_MESSAGE_TEXT,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_help_keyboard(),
+    )
 
 
 # ── /subscribe / /unsubscribe ──────────────────────────────────────────────────
@@ -1289,13 +1298,12 @@ async def proposal_handler(
         )
         return
 
-    # The AI now outputs structured HTML directly — no dict parsing needed.
-    summary = proposal_data.get("summary", "N/A")
+    # Assuming proposal_data["summary"] now contains the full HTML block from the AI
+    summary = proposal_data.get("summary", "Summary unavailable.")
 
     final_text = (
         f"🏛️ <b>Celo Governance Proposal #{proposal_id}</b>\n"
-        f"🔗 <a href='{description_url}'>Source</a>\n\n"
-        "💡 <b>AI Summary</b>\n\n"
+        f"<b>Source:</b> {description_url}\n\n"
         f"{summary}"
     )
 

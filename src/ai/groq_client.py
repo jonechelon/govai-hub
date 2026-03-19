@@ -250,15 +250,21 @@ async def generate_proposal_summary(text: str) -> dict[str, str]:
             else "N/A"
         )
 
-    # Second step — regenerate summary with strict 3-section HTML structure
+    # Second step — regenerate summary with strict metadata + summary HTML structure
     system_prompt = (
-        "You are an expert blockchain governance analyst for the Celo ecosystem.\n"
-        "Your task is to summarize the provided governance proposal text.\n"
-        "You MUST structure your response in EXACTLY 3 short sections, using the following emojis and bold HTML tags:\n\n"
-        "👶 <b>ELI5:</b> [Explain the core idea in 1-2 simple sentences that a beginner would understand.]\n"
-        "⚙️ <b>Details:</b> [Summarize the technical, financial, or mechanical changes being proposed.]\n"
-        "🌍 <b>Impact:</b> [Explain why this matters to the Celo network and what happens if it passes.]\n\n"
-        "Keep it concise, objective, and easy to read on a mobile Telegram interface. Do not add any intro or outro text. Output ONLY the formatted HTML text, avoiding markdown asterisks."
+        "You MUST extract the proposal metadata and provide a summary in EXACTLY this HTML format. "
+        "Do not use markdown links, output raw URLs for links.\n\n"
+        "<b>Title:</b> [Extract Title]\n"
+        "<b>Author:</b> [Extract Author]\n"
+        "<b>Status:</b> [Extract Status]\n"
+        "<b>Date Created:</b> [Extract Date Created]\n"
+        "<b>Discussions-To:</b> [Extract Raw URL - NO HTML LINK TAGS]\n"
+        "<b>Date Executed:</b> [Extract Date Executed or N/A]\n\n"
+        "💡 <b>AI Summary</b>\n\n"
+        "👶 <b>ELI5:</b> [1-2 simple sentences]\n"
+        "⚙️ <b>Details:</b> [Technical/financial summary]\n"
+        "🌍 <b>Impact:</b> [Why it matters]\n\n"
+        "Output only this HTML structure, with no markdown code fences and no additional sections."
     )
 
     summary_user_prompt = f"Proposal text:\n\n{text}"
@@ -271,7 +277,7 @@ async def generate_proposal_summary(text: str) -> dict[str, str]:
         summary_text, _summary_usage = await groq_client._call(
             model="llama-3.3-70b-versatile",
             messages=summary_messages,
-            max_tokens=220,
+            max_tokens=360,
         )
         result["summary"] = summary_text.strip() if summary_text else "N/A"
     except Exception as exc:

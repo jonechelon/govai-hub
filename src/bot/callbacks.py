@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, ContextTypes
@@ -13,7 +13,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes
 from web3 import Web3
 
 from src.bot.handlers import (
-    HELP_MESSAGE,
+    HELP_MESSAGE_TEXT,
     PLAN_30D_CUSD,
     PLAN_7D_CUSD,
     PREMIUM_MESSAGE,
@@ -28,6 +28,7 @@ from src.bot.keyboards import (
     get_links_keyboard,
     get_main_keyboard,
     get_governance_keyboard,
+    get_help_keyboard,
     get_wallet_keyboard,
     get_premium_keyboard,
     get_premium_plan_keyboard,
@@ -65,7 +66,11 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _handle_start(query, user_id)
         elif data == "menu:main":
             await _handle_start(query, user_id)
+        elif data == "main_menu":
+            await _handle_start(query, user_id)
         elif data == "governance:open":
+            await _handle_governance_open(query)
+        elif data == "governance_menu":
             await _handle_governance_open(query)
         elif data == "digest:latest":
             await _handle_digest_latest(query, context, user_id)
@@ -97,6 +102,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _handle_network_switch(query, user_id)
         elif data == "premium:open":
             await _handle_premium_open(query, context, user_id)
+        elif data == "premium":
+            await _handle_premium_open(query, context, user_id)
         elif data == "premium:7d":
             await _handle_premium_plan(query, user_id, days=7)
         elif data == "premium:30d":
@@ -108,6 +115,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif data.startswith("back:"):
             await _handle_back(query, user_id)
         elif data == "help:open":
+            await _handle_help_open(query, user_id)
+        elif data == "help":
             await _handle_help_open(query, user_id)
         elif data == "govlist":
             await _handle_govlist(query)
@@ -815,21 +824,11 @@ async def _handle_resubscribe(query, user_id: int) -> None:
 async def _handle_help_open(query, user_id: int) -> None:
     """Show help message inline."""
     logger.debug("[HELP] help:open | user=%d", user_id)
-
-    help_kb = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "⬅️ Back to Menu",
-                    callback_data="start",
-                )
-            ]
-        ]
-    )
+    help_kb = get_help_keyboard()
 
     try:
         await query.edit_message_text(
-            HELP_MESSAGE,
+            HELP_MESSAGE_TEXT,
             reply_markup=help_kb,
             parse_mode=ParseMode.HTML,
         )
@@ -837,7 +836,7 @@ async def _handle_help_open(query, user_id: int) -> None:
         if "Message is not modified" in str(e):
             return
         await query.message.reply_text(
-            HELP_MESSAGE,
+            HELP_MESSAGE_TEXT,
             reply_markup=help_kb,
             parse_mode=ParseMode.HTML,
         )

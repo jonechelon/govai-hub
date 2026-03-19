@@ -1,21 +1,42 @@
 # 🍪 Celo GovAI Hub 🟡
 
-**Be up-to-date on the Celo Blockchain.**
+**Be up to date on Celo Decentralized Governance.**
 
-> AI agent · Telegram · Governance Hub · Built on Celo
+> 🍪 **Welcome to Celo GovAI Hub!** 🟡
+> Your mobile-first, network-agnostic AI terminal for the Celo Ecosystem. Bridging the gap between On-chain Insights, Decentralized Governance, and Daily Digests-all secured by Celo's native LockedGold architecture and delivered straight to your Telegram.
 
----
-
-## What is it?
+## What is Celo GovAI Hub?
 
 **Celo GovAI Hub** is a mobile-first AI terminal designed for the Celo ecosystem. It delivers daily on-chain insights and allows you to participate in network governance with a single command (e.g., `/vote 47 YES/NO`—all while keeping your funds strictly non-custodial and secure through Celo's native `LockedGold` architecture.
 
-> 💡 **The UX Problem We Solve:**
+> 💡 **The UX Problem We Solve:**  
 > The traditional Web3 governance funnel is broken. Over 70% of users drop off between discovering a proposal, opening a dApp, connecting a wallet, and finally signing an on-chain transaction. 
 >
 > **With Celo GovAI Hub**, once `LockedGold` delegation is in place, governance becomes a frictionless, mobile-native interaction. You vote directly from Telegram using a single, fast command: `/vote <id> YES|NO|ABSTAIN` (e.g., `/vote 47 YES`).
 
 **Try it:** [@CeloGovAI_bot](https://t.me/CeloGovAI_bot)
+
+---
+
+### ⏱️ TL;DR for Technical Judges
+
+Are you evaluating the technical depth of this project? Skip the standard bot features and dive directly into our architecture. Explore our `/docs` folder to see our Web3 integration, proxy resolution, crypto-native economy, and security implementations:
+
+- 🛡️ **[Security & Architecture](docs/architecture.md):** How we implemented Separation of Concerns (Treasury vs. Governance Delegate) and structured our PostgreSQL/Render environment.
+- ⛓️ **[On-Chain Truth & LockedGold](docs/governance_flow.md):** The bot doesn't trust third-party APIs. It reads Celo's `LockedGold` proxies directly via `Web3.py` to verify delegation before allowing votes.
+- 🤖 **[Advanced Prompt Engineering](docs/ai_prompts.md):** How we tamed the Groq LLM to parse dense technical proposals into modular, mobile-friendly formats (ELI5, Details, Impact).
+- 🌐 **[Data Aggregation Engine](docs/data_aggregation_engine.md):** Acting as an off-chain oracle, pulling from Celo Forums (RSS), sentiment, and on-chain metrics.
+- 💳 **[Crypto Payment Gateway](docs/crypto_payment_gateway.md):** A fully decentralized premium subscription model verifying cUSD transfers autonomously.
+- ⚙️ **[Async Background Workers](docs/async_background_workers.md):** Proactive task scheduling (Daily Digests, Vote Alerts) running silently without blocking the main Webhook server.
+- 🗄️ **[Relational State Management](docs/database_schema.md):** Robust user preferences, network toggles (Mainnet/Alfajores), and wallet states handled via Neon/Postgres.
+
+---
+
+## 📸 Interface & Demo
+
+*(Images and GIFs coming soon...)*
+
+---
 
 ---
 
@@ -51,19 +72,13 @@
 
 ## Mobile-First Governance
 
-Celo GovAI Hub eliminates that friction with a mobile-first governance flow built on Celo's
-`LockedGold` contract using the "Proxy via Delegation" model.
+Celo GovAI Hub eliminates that friction with a mobile-first governance flow built on Celo's `LockedGold`contract using the "Proxy via Delegation" model.
 
-In this model, users keep their CELO in their own self-custodial wallet and make a single,
-one-time delegation to enable voting power via `LockedGold`. Once delegation is in place, the
-Gov Hub uses that delegated voting power to execute votes on-chain on the user's behalf.
+In this model, users keep their CELO in their own self-custodial wallet and make a single,one-time delegation to enable voting power via `LockedGold`. Once delegation is in place, the Gov Hub uses that delegated voting power to execute votes on-chain on the user's behalf.
 
-After the one-time setup, participation becomes simple and Telegram-native: users vote with a
-single command (e.g., `/vote 123 YES|NO|ABSTAIN`) without repeatedly signing new on-chain
-transactions for every proposal.
+After the one-time setup, participation becomes simple and Telegram-native: users vote with a single command (e.g., `/vote 123 YES|NO|ABSTAIN`) without repeatedly signing new on-chain transactions for every proposal.
 
-The outcome is governance that feels like chatting with an assistant, while preserving the security
-assumptions and delegation guarantees of the underlying Celo network.
+The outcome is governance that feels like chatting with an assistant, while preserving the security assumptions and delegation guarantees of the underlying Celo network.
 
 To completely align with real-world economics, the Hub's premium features are monetized exclusively through **cUSD** (Celo Dollar). By charging in a stablecoin rather than a volatile asset, the agent offers predictable pricing for users and supports the "Real World Agents" narrative, proving that automated governance and AI digests can be seamlessly powered by everyday digital currency.
 
@@ -118,27 +133,27 @@ during severe congestion.
 - ✅ Personalized settings per user
 - ✅ Premium payments on Mainnet (fully migrated from native CELO to cUSD)
 - ✅ cUSD-only payment detection and on-chain `/confirmpayment` verification via ERC-20 `Transfer` events
-- ✅ Refactored `payment_fetcher.py` cUSD payment detection to rely on `Transfer` events to `BOT_WALLET_ADDRESS` only (Phase 13 · P45)
+- ✅ Refactored `payment_fetcher.py` cUSD payment detection to rely on `Transfer` events to `BOT_WALLET_ADDRESS` only 
 - ✅ Telegram payment UI fully migrated to cUSD plans (Phase 13)
-- ✅ P46 — Updated `/premium` and `/setwallet` handlers to reflect cUSD plan pricing (Phase 13 · P46)
+- ✅ Updated `/premium` and `/setwallet` handlers to reflect cUSD plan pricing (Phase 13 · P46)
 - ✅ Health monitoring + UptimeRobot
 - ✅ ERC-8004 on-chain agent registration
 - ✅ Governance proposal push alerts (15min polling + `/governance`)
 - ✅ Mobile-first governance via `LockedGold` delegation + Telegram voting (`/vote 123 YES`)
 - ✅ README value proposition refresh for hackathon judges (Mobile-first governance, cUSD, security) (Phase 12)
-- ✅ P47 — Expansão do DB para Governança (LockedGold delegation tracking: `user_wallet`, `delegated_power`, `revoked_at`)
-- ✅ P48 — Delegation Command (`/delegate` and `/revoke`) with LockedGold self-custodial instructions (Phase 14 · P48)
-- ✅ P49 — On-chain delegation status validator via LockedGold (`/govstatus`) with `delegated_power` + `revoked_at` tracking (Phase 14 · P49)
-- ✅ Governance vote intent queue and `/vote` command (Phase 15 · P50)
-- ✅ Gas price ceiling safety module for governance transactions (Phase 15 · P51)
-- ✅ Governance transaction simulation (dry-run via `eth_call`) for votes (Phase 15 · P52)
-- ✅ P53 — Scheduled governance vote executor with majority aggregation and on-chain execution (Phase 15 · P53, runs every 30 minutes)
-- ✅ Governance proposal description text extractor with `timeout=5` and 8000-character hard limit (Phase 16 · P54)
-- ✅ Phase 16 complete: P54 (extractor) + P55 (`/proposal <id>` Groq ELI5 summaries + AI Summary in governance push alerts)
-- ✅ UX fix: `/proposal <id>` now falls back on-chain (via `getProposal()`) only when the proposal is missing from local DB, with a clearer "not found" response (Phase 17 · P56)
-- ✅ `/govlist` native on-chain proposal listing via `getQueue()` and `getDequeue()` with `queued` + `dequeued` buckets (Phase 17 · P57)
-- ✅ Native on-chain governance history listing (`/govhistory`) with stage-based filtering and safe Telegram limits (Phase 17 · P58)
-- ✅ Advanced on-chain filtering for `/govlist` (remove zeros/duplicates, resolve true stage per ID, cap inactive buckets) (Phase 18 · P59)
+- ✅ LockedGold delegation tracking: `user_wallet`, `delegated_power`, `revoked_at`)
+- ✅ Delegation Command (`/delegate` and `/revoke`) with LockedGold self-custodial instructions (Phase 14 · P48)
+- ✅ On-chain delegation status validator via LockedGold (`/govstatus`) with `delegated_power` + `revoked_at` tracking 
+- ✅ Governance vote intent queue and `/vote` command 
+- ✅ Gas price ceiling safety module for governance transactions 
+- ✅ Governance transaction simulation (dry-run via `eth_call`) for votes
+- ✅ Scheduled governance vote executor with majority aggregation and on-chain execution (runs every 30 minutes)
+- ✅ Governance proposal description text extractor with `timeout=5` and 8000-character hard limit 
+- ✅ P54 (extractor) + P55 (`/proposal <id>` Groq ELI5 summaries + AI Summary in governance push alerts)
+- ✅ UX fix: `/proposal <id>` now falls back on-chain (via `getProposal()`) only when the proposal is missing from local DB, with a clearer "not found" response
+- ✅ `/govlist` native on-chain proposal listing via `getQueue()` and `getDequeue()` with `queued` + `dequeued` buckets · 
+- ✅ Native on-chain governance history listing (`/govhistory`) with stage-based filtering and safe Telegram limits 
+- ✅ Advanced on-chain filtering for `/govlist` (remove zeros/duplicates, resolve true stage per ID, cap inactive buckets) 
 
 ## Roadmap
 

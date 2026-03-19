@@ -84,6 +84,19 @@ def get_main_keyboard(
     return InlineKeyboardMarkup([row1, row2, vote_alerts_row, row4])
 
 
+def get_help_keyboard() -> InlineKeyboardMarkup:
+    """Build the help screen keyboard with quick shortcuts."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏛️ Governance", callback_data="governance_menu"),
+            InlineKeyboardButton("💎 Premium", callback_data="premium"),
+        ],
+        [
+            InlineKeyboardButton("« Back to Main Menu", callback_data="main_menu"),
+        ],
+    ])
+
+
 def get_digest_keyboard(digest_id: str) -> InlineKeyboardMarkup:
     """Build the keyboard attached to a digest message."""
     row1 = [
