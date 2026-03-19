@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import logging
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,22 @@ def load_config(path: Path = _CONFIG_PATH) -> dict:
 
     logger.debug("[CONFIG] config.yaml loaded from %s", path)
     return data
+
+
+# Celo network + LockedGold contract helpers
+def get_celo_network() -> str:
+    # Default to mainnet if not specified in environment
+    return os.getenv("CELO_NETWORK", "mainnet").lower()
+
+
+def get_lockedgold_address() -> str:
+    # Return the correct LockedGold contract address based on the network
+    network = get_celo_network()
+    if network == "alfajores":
+        return "0x6a0f6F537582864C649646452f7596853A10a667"
+
+    # Mainnet default
+    return "0x8D6b21c169dfE41f17F4d6d1d4fF3a44f802d334"
 
 
 # Singleton — imported once, shared across modules

@@ -23,6 +23,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -133,6 +134,18 @@ class User(Base):
     premium_expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    preferred_network: Mapped[str] = mapped_column(
+        String(16),
+        default="mainnet",
+        server_default="mainnet",
+        nullable=False,
+    )
+    notifications_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="1",
+        nullable=False,
     )
     wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True, unique=True)
     # Celo wallet address provided by the user for payment verification
@@ -272,3 +285,20 @@ async def init_db() -> None:
     """Create all tables if they do not exist. Safe to call on every startup."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Fallback migration for local SQLite development only.
+        # SQLite does not support transactional DDL in the same way as Postgres,
+        # so we attempt each ALTER TABLE individually and silently ignore errors
+        # that indicate the column already exists.
+        if "sqlite" in str(engine.url):
+            _SQLITE_MIGRATIONS = [
+                "ALTER TABLE governance_alerts ADD COLUMN deposit_cusd FLOAT;",
+                "ALTER TABLE users ADD COLUMN preferred_network VARCHAR(16) DEFAULT 'mainnet';",
+                "ALTER TABLE users ADD COLUMN notifications_enabled BOOLEAN DEFAULT 1;",
+            ]
+            for statement in _SQLITE_MIGRATIONS:
+                try:
+                    await conn.execute(text(statement))
+                except Exception:
+                    # Column already exists — safe to ignore
+                    pass

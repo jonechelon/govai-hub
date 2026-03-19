@@ -59,9 +59,11 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if data == "noop":
             return  # silently ignore category header buttons
         elif data == "start":
-            await _handle_start(query)
+            await _handle_start(query, user_id)
         elif data == "digest:latest":
             await _handle_digest_latest(query, context, user_id)
+        elif data == "wallet:open":
+            await _handle_wallet_open(query, user_id)
         elif data.startswith("details:"):
             _, digest_id = data.split(":", 1)
             await _handle_details(query, context, digest_id)
@@ -77,9 +79,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             cat_key = data.split(":", 2)[2]
             await _handle_settings_category(query, context, user_id, cat_key)
         elif data == "settings_close":
-            await _handle_settings_close(query)
+            await _handle_settings_close(query, user_id)
         elif data.startswith("toggle_app:"):
             await _handle_toggle_app(query, user_id)
+        elif data == "notify:toggle":
+            await _handle_notifications_toggle(query, user_id)
+        elif data == "net:switch":
+            await _handle_network_switch(query, user_id)
         elif data == "premium:open":
             await _handle_premium_open(query, context, user_id)
         elif data == "premium:7d":
@@ -93,7 +99,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif data.startswith("back:"):
             await _handle_back(query, user_id)
         elif data == "help:open":
-            await _handle_help_open(query)
+            await _handle_help_open(query, user_id)
         elif data == "govlist":
             await _handle_govlist(query)
         elif data == "govhistory":
@@ -123,20 +129,62 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
 
 
-async def _handle_start(query) -> None:
+async def _handle_start(query, user_id: int) -> None:
     """Return to the main menu screen."""
+    user_record = await db.get_user(user_id)
+    preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
+    notifications_enabled = getattr(user_record, "notifications_enabled", True)
+    main_kb = get_main_keyboard(
+        preferred_network=preferred_network,
+        notifications_enabled=notifications_enabled,
+    )
     try:
         await query.edit_message_text(
             WELCOME_MESSAGE,
-            reply_markup=get_main_keyboard(),
-            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_kb,
+            parse_mode=ParseMode.HTML,
         )
     except BadRequest:
         try:
             await query.message.reply_text(
                 WELCOME_MESSAGE,
-                reply_markup=get_main_keyboard(),
-                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=main_kb,
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _handle_wallet_open(query, user_id: int) -> None:
+    """Show wallet registration instructions (same intent as /setwallet without args)."""
+    text = (
+        "👛 Set Wallet\n\n"
+        "Register your wallet to enable Premium auto-activation and governance delegation checks.\n\n"
+        "Usage:\n"
+        "/setwallet 0xYourWalletAddress\n\n"
+        "Important: use a personal wallet (MiniPay, Valora, MetaMask).\n"
+        "Exchange withdrawals cannot be detected automatically.\n"
+        "For exchanges, use /confirmpayment instead."
+    )
+
+    user_record = await db.get_user(user_id)
+    preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
+    notifications_enabled = getattr(user_record, "notifications_enabled", True)
+    main_kb = get_main_keyboard(
+        preferred_network=preferred_network,
+        notifications_enabled=notifications_enabled,
+    )
+
+    try:
+        await query.edit_message_text(
+            text=text,
+            reply_markup=main_kb,
+        )
+    except BadRequest:
+        try:
+            await query.message.reply_text(
+                text=text,
+                reply_markup=main_kb,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -427,16 +475,24 @@ async def _handle_settings_open(
     query, context: ContextTypes.DEFAULT_TYPE, user_id: int
 ) -> None:
     """Open root settings menu with 4 category buttons."""
+    user_record = await db.get_user(user_id)
+    preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
+    notifications_enabled = getattr(user_record, "notifications_enabled", True)
     user_apps = await db.get_user_apps_by_category(user_id)
     text = (
         "⚙️ Celo GovAI Hub — Select Your Apps\n\n"
+        "Also manage your governance network and vote alert preferences.\n\n"
         "Tap a category to manage its apps.\n"
         "✅ = all enabled  ☑️ = some enabled  ☐ = none"
     )
     try:
         await query.message.edit_text(
             text,
-            reply_markup=get_settings_keyboard(user_apps),
+            reply_markup=get_settings_keyboard(
+                user_apps,
+                preferred_network=preferred_network,
+                notifications_enabled=notifications_enabled,
+            ),
         )
     except BadRequest:
         pass
@@ -457,16 +513,90 @@ async def _handle_settings_category(
         pass
 
 
-async def _handle_settings_close(query) -> None:
+async def _handle_settings_close(query, user_id: int) -> None:
     """Close settings and show save confirmation."""
+    user_record = await db.get_user(user_id)
+    preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
+    notifications_enabled = getattr(user_record, "notifications_enabled", True)
+    main_kb = get_main_keyboard(
+        preferred_network=preferred_network,
+        notifications_enabled=notifications_enabled,
+    )
     try:
         await query.edit_message_text(
             text="✅ <b>Settings saved.</b>\n\nYour digest will reflect your app selection.",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_main_keyboard(),
+            reply_markup=main_kb,
         )
     except BadRequest:
         pass
+
+
+async def _refresh_keyboard_after_preference_change(query, user_id: int) -> None:
+    """Refresh reply_markup in-place after network/notification changes."""
+    user_record = await db.get_user(user_id)
+    if not user_record:
+        return
+
+    preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
+    notifications_enabled = getattr(user_record, "notifications_enabled", True)
+
+    message_text = getattr(getattr(query, "message", None), "text", "") or ""
+    is_settings_root = message_text.startswith("⚙️ Celo GovAI Hub — Select Your Apps")
+
+    if is_settings_root:
+        user_apps = await db.get_user_apps_by_category(user_id)
+        reply_markup = get_settings_keyboard(
+            user_apps,
+            preferred_network=preferred_network,
+            notifications_enabled=notifications_enabled,
+        )
+    else:
+        reply_markup = get_main_keyboard(
+            preferred_network=preferred_network,
+            notifications_enabled=notifications_enabled,
+        )
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+    except BadRequest:
+        # Best-effort only — some Telegram message types may not support editing markup.
+        pass
+
+
+async def _handle_notifications_toggle(query, user_id: int) -> None:
+    """Toggle vote alerts and update UI state."""
+    new_value = await db.toggle_notifications_enabled(user_id)
+    toast = "Notifications turned ON" if new_value else "Notifications turned OFF"
+    await query.answer(toast, show_alert=False)
+    await _refresh_keyboard_after_preference_change(query, user_id)
+
+    logger.info("[SETTINGS] notifications_enabled toggled | user=%s | enabled=%s", user_id, new_value)
+
+
+async def _handle_network_switch(query, user_id: int) -> None:
+    """Toggle user's governance network between mainnet and alfajores.
+
+    Reads the current preferred_network from the DB, flips it to the other
+    value, persists the change, and refreshes the keyboard in-place so the
+    button immediately reflects the new active network.
+    """
+    user_record = await db.get_user(user_id)
+    current = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
+    new_network = "alfajores" if current.lower() == "mainnet" else "mainnet"
+
+    await db.set_preferred_network(user_id, new_network)
+
+    network_label = "🍪 Alfajores" if new_network == "alfajores" else "🟡 Mainnet"
+    await query.answer(f"Network switched to {network_label}", show_alert=False)
+    await _refresh_keyboard_after_preference_change(query, user_id)
+
+    logger.info(
+        "[SETTINGS] preferred_network toggled | user=%s | %s → %s",
+        user_id,
+        current,
+        new_network,
+    )
 
 
 async def _handle_toggle_app(query, user_id: int) -> None:
@@ -636,9 +766,16 @@ async def _handle_resubscribe(query, user_id: int) -> None:
 
 # ── help ───────────────────────────────────────────────────────────────────────
 
-async def _handle_help_open(query) -> None:
+async def _handle_help_open(query, user_id: int) -> None:
     """Show help message inline."""
-    await query.message.reply_text(HELP_MESSAGE, reply_markup=get_main_keyboard())
+    user_record = await db.get_user(user_id)
+    preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
+    notifications_enabled = getattr(user_record, "notifications_enabled", True)
+    main_kb = get_main_keyboard(
+        preferred_network=preferred_network,
+        notifications_enabled=notifications_enabled,
+    )
+    await query.message.reply_text(HELP_MESSAGE, reply_markup=main_kb)
 
 
 async def _handle_govlist(query) -> None:

@@ -41,20 +41,47 @@ APP_DISPLAY: dict[str, str] = {
 }
 
 
-def get_main_keyboard() -> InlineKeyboardMarkup:
-    """Build the main menu keyboard."""
+def get_main_keyboard(
+    preferred_network: str = "mainnet",
+    notifications_enabled: bool = True,
+) -> InlineKeyboardMarkup:
+    """Build the main menu keyboard.
+
+    Note:
+        This keyboard is rendered dynamically per-user so it can display the current
+        governance network preference and the notification toggle state.
+    """
     row1 = [
         InlineKeyboardButton("📰 Latest Digest", callback_data="digest:latest"),
         InlineKeyboardButton("⚙️ Settings", callback_data="settings:open"),
     ]
     row2 = [
         InlineKeyboardButton("🏛️ Governance", callback_data="governance:open"),
+        InlineKeyboardButton("👛 Set Wallet", callback_data="wallet:open"),
     ]
-    row3 = [
+    vote_alerts_label = (
+        "🟢 Vote Alerts" if notifications_enabled else "🔴 Vote Alerts"
+    )
+    vote_alerts_row = [
+        InlineKeyboardButton(vote_alerts_label, callback_data="notify:toggle"),
+    ]
+
+    # Show the active network so users always know where they are.
+    # Tapping the button toggles to the other network via net:switch.
+    if preferred_network == "alfajores":
+        switch_label = "🍪 Alfajores"
+    else:
+        switch_label = "🟡 Mainnet"
+
+    vote_alerts_row.append(
+        InlineKeyboardButton(switch_label, callback_data="net:switch")
+    )
+
+    row4 = [
         InlineKeyboardButton("💎 Premium", callback_data="premium:open"),
         InlineKeyboardButton("❓ Help", callback_data="help:open"),
     ]
-    return InlineKeyboardMarkup([row1, row2, row3])
+    return InlineKeyboardMarkup([row1, row2, vote_alerts_row, row4])
 
 
 def get_digest_keyboard(digest_id: str) -> InlineKeyboardMarkup:
@@ -109,6 +136,8 @@ def get_details_keyboard(digest_id: str) -> InlineKeyboardMarkup:
 
 def get_settings_keyboard(
     user_apps_by_category: dict[str, list[str]],
+    preferred_network: str = "mainnet",
+    notifications_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
     """Root settings screen — 4 category buttons with aggregate enabled state.
 
@@ -136,6 +165,28 @@ def get_settings_keyboard(
                 callback_data=f"settings:category:{cat_key}",
             )
         ])
+
+    vote_alerts_label = (
+        "🟢 Vote Alerts" if notifications_enabled else "🔴 Vote Alerts"
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(vote_alerts_label, callback_data="notify:toggle"),
+        ]
+    )
+
+    # Show the active network so users always know where they are.
+    # Tapping the button toggles to the other network via net:switch.
+    if preferred_network == "alfajores":
+        switch_label = "🍪 Alfajores"
+    else:
+        switch_label = "🟡 Mainnet"
+
+    rows.append(
+        [
+            InlineKeyboardButton(switch_label, callback_data="net:switch"),
+        ]
+    )
 
     rows.append([
         InlineKeyboardButton("💾 Save & Close", callback_data="settings_close")

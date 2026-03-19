@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 
@@ -185,32 +186,65 @@ class GroqClient:
 groq_client = GroqClient()
 
 
-async def generate_proposal_summary(text: str) -> str:
-    """Generate an ELI5-style governance proposal summary in exactly 3 bullet points.
+async def generate_proposal_summary(text: str) -> dict:
+    """Extract metadata and generate an ELI5 summary from a Celo governance proposal.
 
-    This helper uses the primary llama-3.3-70b-versatile model with a fixed
-    system prompt tailored for Celo governance proposals.
+    The LLM is instructed to respond exclusively with a valid JSON object
+    containing proposal metadata fields and a plain-language ELI5 summary.
 
     Args:
         text: Cleaned proposal description text extracted from the source URL.
 
     Returns:
-        The LLM-generated summary as a Markdown bullet list.
+        A dict with keys: title, date_created, author, status, discussions_to,
+        date_executed, summary. Any missing field defaults to 'N/A'.
+        Returns a fallback dict if JSON parsing fails.
     """
     system_prompt = (
-        "You are a Celo blockchain analyst. Summarize the following technical proposal in exactly 3 bullet points "
-        "using an 'Explain Like I'm 5' (ELI5) style. Focus strictly on answering: 1. What changes? "
-        "2. How much does it cost? 3. Why does it matter to the ecosystem?"
+        "You are a Celo blockchain data extractor and analyst. "
+        "Your task is to read a Celo governance proposal text and extract structured metadata. "
+        "You MUST respond EXCLUSIVELY with a single valid JSON object — no extra text, no markdown fences. "
+        "The JSON object must contain exactly these keys: "
+        "\"title\", \"date_created\", \"author\", \"status\", "
+        "\"discussions_to\", \"date_executed\", \"summary\". "
+        "If a specific metadata field is not found in the text, return \"N/A\" for that field. "
+        "The \"summary\" field must contain an ELI5 (Explain Like I'm 5) explanation in exactly "
+        "3 bullet points answering: 1. What changes? 2. How much does it cost? "
+        "3. Why does it matter to the ecosystem?"
     )
     user_prompt = f"Proposal text:\n\n{text}"
-    # 3 short bullets should comfortably fit within 220 tokens.
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+    # Increased token budget to accommodate JSON envelope + 3-bullet summary.
     content, _usage = await groq_client._call(
         model="llama-3.3-70b-versatile",
         messages=messages,
-        max_tokens=220,
+        max_tokens=500,
     )
-    return content
+
+    _EXPECTED_KEYS = ("title", "date_created", "author", "status", "discussions_to", "date_executed", "summary")
+    _FALLBACK: dict = {k: "N/A" for k in _EXPECTED_KEYS}
+    _FALLBACK["summary"] = content or "Summary unavailable."
+
+    try:
+        clean = content.strip()
+        # Strip markdown code fences that some models add despite instructions.
+        if clean.startswith("```"):
+            parts = clean.split("```")
+            clean = parts[1] if len(parts) > 1 else clean
+            if clean.startswith("json"):
+                clean = clean[4:]
+        result: dict = json.loads(clean)
+        for key in _EXPECTED_KEYS:
+            if key not in result:
+                result[key] = "N/A"
+        return result
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "[GROQ] generate_proposal_summary JSON parse failed | error=%s | raw=%.200s",
+            exc,
+            content,
+        )
+        return _FALLBACK

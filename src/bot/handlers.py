@@ -31,7 +31,6 @@ from src.ai.groq_client import groq_client, generate_proposal_summary
 from src.bot.keyboards import (
     get_digest_keyboard,
     get_main_keyboard,
-    governance_keyboard,
     get_premium_keyboard,
     get_settings_keyboard,
 )
@@ -185,40 +184,25 @@ def admin_only(handler):
         return await handler(update, context)
     return wrapper
 
-START_MESSAGE = (
-    "Welcome to Celo GovAI Hub! 🟡\n"
-    "Your mobile-first AI terminal for **Celo Ecosystem**, On-chain Insights, and Daily "
-    "Digests—secured by Celo's native `LockedGold` architecture.\n\n"
-    "Covering: 🏛️ Governance Hub, 📈 DeFi/ReFi, 🌍 Real-World Assets & ⚡ Live On-chain Data.\n\n"
-    "📰 /digest — Today's Celo digest (Daily at 08:30 AM Europe/Madrid)\n"
-    "🤖 /ask — Chat with the Celo AI agent\n"
-    "🏛️ /governance — Access the Gov Hub\n"
-    "⚙️ /settings — Customize your feed\n"
-    "⭐️ /premium — Upgrade with cUSD\n\n"
-    "→ Start with /governance"
-)
-
-WELCOME_MESSAGE = START_MESSAGE
-HELP_MESSAGE = (
-    "Welcome to Celo GovAI Hub! 🟡\n\n"
-    "I help you stay up-to-date on the Celo blockchain with daily AI-powered digests.\n\n"
-    "Main commands:\n"
+_MAIN_MESSAGE = (
+    "Welcome to Up-to-Celo AI! 🟡\n\n"
+    "Stay up-to-date on the Celo blockchain with daily AI-powered digests.\n"
+    "Covering: network updates, DeFi, ReFi, governance & live on-chain data.\n\n"
     "📰 /digest — Get today's Celo digest\n"
     "🤖 /ask — Chat with the Celo AI agent\n"
-    "🏛️ /governance — Governance Hub (Proposals & Voting)\n"
+    "   Ex: /ask What's new in Ubeswap?\n"
+    "   Ex: /ask How to vote on governance?\n"
+    "🗳️ /governance — Latest Celo proposals\n"
     "⚙️ /settings — Customize your feed\n"
     "⭐️ /premium — Upgrade with cUSD\n\n"
-    "Governance sub-commands:\n"
-    "🗳️ /govlist — Active proposals\n"
-    "📚 /govhistory — Voting history\n"
-    "📝 /proposal <id> — AI summary of a proposal\n"
-    "✅ /vote <id> <choice> — Vote (YES/NO/ABSTAIN)\n"
-    "🤝 /delegate — Delegate voting power (LockedGold)\n"
-    "📍 /govstatus — Check your on-chain delegation status"
+    "→ Start with /digest"
 )
 
+WELCOME_MESSAGE = _MAIN_MESSAGE
+HELP_MESSAGE = _MAIN_MESSAGE
+
 PREMIUM_MESSAGE = (
-    "Premium — Celo GovAI Hub\n\n"
+    "Premium — Up-to-Celo\n\n"
     "Unlock unlimited AI queries and the best Celo insights.\n\n"
     f"7-day Premium  — {PLAN_7D_CUSD:.1f} cUSD\n"
     f"30-day Premium — {PLAN_30D_CUSD:.1f} cUSD\n\n"
@@ -245,8 +229,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await db.update_subscription(user_id, True)
 
     await update.message.reply_text(
-        START_MESSAGE,
-        parse_mode=ParseMode.MARKDOWN,
+        WELCOME_MESSAGE,
         reply_markup=get_main_keyboard(),
     )
 
@@ -301,7 +284,7 @@ async def subscribe_handler(
     logger.info("[SUBSCRIBE] User subscribed | user=%s", user_id)
 
     await update.message.reply_text(
-        "You are now subscribed to Celo GovAI Hub!\n\n"
+        "You are now subscribed to Up-to-Celo!\n\n"
         f"Next digest: {_next_digest_str()}\n\n"
         "You will receive a daily AI-powered Celo digest automatically.\n\n"
         "Commands:\n"
@@ -367,7 +350,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if is_premium and premium_expires_at:
         message = (
-            "Your Celo GovAI Hub Status\n\n"
+            "Your Up-to-Celo Status\n\n"
             "Plan: Premium\n"
             f"Expires: {premium_expires_at.strftime('%b %d, %Y')}\n"
             "AI model: llama-3.3-70b-versatile (unlimited asks)\n\n"
@@ -375,7 +358,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     else:
         message = (
-            "Your Celo GovAI Hub Status\n\n"
+            "Your Up-to-Celo Status\n\n"
             "Plan: Free\n"
             "AI model: llama-3.1-8b-instant (3 asks/day)\n\n"
             "Next digest: today at 08:30 CET (Europe/Madrid)\n\n"
@@ -414,7 +397,7 @@ async def premium_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
     await update.message.reply_text(
-        f"Premium plans — Celo GovAI Hub\n\n"
+        f"Premium plans — Up-to-Celo\n\n"
         f"7-day Premium  — {PLAN_7D_CUSD:.1f} cUSD\n"
         f"30-day Premium — {PLAN_30D_CUSD:.1f} cUSD\n\n"
         f"Send cUSD stablecoin to:\n"
@@ -686,7 +669,7 @@ async def confirm_payment_handler(
         f"Expires: {expires_at.strftime('%Y-%m-%d')}\n"
         f"Confirmations: {payment['confirmations']}\n"
         f"Method: {payment['method']}\n\n"
-        "You now have unlimited AI queries. Enjoy Celo GovAI Hub Premium!",
+        "You now have unlimited AI queries. Enjoy Up-to-Celo Premium!",
     )
 
 
@@ -850,7 +833,7 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     user_apps = await db.get_user_apps_by_category(user_id)
     await update.message.reply_text(
-        "⚙️ Celo GovAI Hub — Select Your Apps\n\n"
+        "⚙️ Up-to-Celo — Select Your Apps\n\n"
         "Tap a category to manage its apps.\n"
         "✅ = all enabled  ☑️ = some enabled  ☐ = none",
         reply_markup=get_settings_keyboard(user_apps),
@@ -893,7 +876,7 @@ def _build_ask_messages(session: dict, new_question: str) -> list[dict]:
     system_msg = {
         "role": "system",
         "content": (
-            "You are Celo GovAI Hub, an enthusiastic AI agent and proud advocate of the "
+            "You are Up-to-Celo, an enthusiastic AI agent and proud advocate of the "
             "Celo blockchain ecosystem. Your mission is to inform, inspire, and engage "
             "users about everything happening in the Celo world.\n\n"
 
@@ -1061,62 +1044,22 @@ async def stop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def governance_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle /governance command — show Governance Hub overview."""
-    text = (
-        "🏛️ **Celo GovAI Hub**\n\n"
-        "Manage your voting power and participate in Celo's future.\n\n"
-        "**Commands:**\n"
-        "🗳️ /govlist — See all active proposals\n"
-        "📚 /govhistory — Browse concluded decisions\n"
-        "💡 /proposal <id> — Get an AI-powered ELI5 summary\n"
-        "✅ /vote <id> <choice> — Cast your vote (YES/NO/ABSTAIN)\n"
-        "🔑 /delegate — Step-by-step to delegate power safely\n"
-        "📡 /govstatus — Check your current delegation status\n"
-        "👛 /setwallet <address> — Link or change your Celo wallet\n\n"
-        "*Note: You can update your wallet anytime by running /setwallet with a new address.*"
-    )
+    """Handle /governance command — show recent governance proposals."""
+    db_manager = DatabaseManager()
+    alerts = await db_manager.get_recent_alerts(limit=5)
+
+    text = _format_governance_list(alerts)
 
     message = update.effective_message
     if message is None:
         logger.error("[GOV] No effective_message to send governance reply")
         return
 
-    # If triggered from an inline button callback, prefer a smooth in-place edit.
-    query = update.callback_query
-    if query is not None:
-        try:
-            await query.edit_message_text(
-                text=text,
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True,
-                reply_markup=governance_keyboard(),
-            )
-            return
-        except telegram.error.BadRequest:
-            # Fallback to plain text to keep navigation consistent.
-            try:
-                await query.edit_message_text(
-                    text=text,
-                    disable_web_page_preview=True,
-                    reply_markup=governance_keyboard(),
-                )
-                return
-            except telegram.error.BadRequest:
-                pass
-
-    try:
-        await message.reply_text(
-            text,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-            reply_markup=governance_keyboard(),
-        )
-    except telegram.error.BadRequest:
-        await message.reply_text(
-            text,
-            disable_web_page_preview=True,
-            reply_markup=governance_keyboard(),
-        )
+    await message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN_V2,
+        disable_web_page_preview=True,
+    )
 
 
 async def govlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1313,7 +1256,7 @@ async def delegate_handler(
         f"   <code>{bot_wallet}</code>\n"
         "6) Review the transaction details carefully.\n"
         "7) Sign and submit the transaction from your own wallet.\n\n"
-        "After the transaction is confirmed on-chain, Celo GovAI Hub can use your delegated "
+        "After the transaction is confirmed on-chain, Up-to-Celo can use your delegated "
         "voting power to vote on Celo governance proposals based on your on-Telegram "
         "vote intents. You can revoke at any time with <code>/revoke</code>."
     )
@@ -1329,7 +1272,7 @@ async def revoke_handler(
 
     message = (
         "⏪ <b>Revoking Delegation (Full Control)</b>\n\n"
-        "You can stop Celo GovAI Hub from voting with your delegated voting power at any time. "
+        "You can stop Up-to-Celo from voting with your delegated voting power at any time. "
         "<b>Revoking does not unlock or move your CELO</b> — it only changes who can vote "
         "with your locked voting power.\n\n"
         "<b>Step-by-step: revoke / change delegation on LockedGold</b>\n\n"
@@ -1346,7 +1289,7 @@ async def revoke_handler(
         "   • If the interface exposes a specific revocation method for LockedGold "
         "delegations, use it following the tool's instructions.\n"
         "5) Review the transaction details and sign it from your own wallet.\n\n"
-        "After the transaction is confirmed on-chain, Celo GovAI Hub will no longer be able to "
+        "After the transaction is confirmed on-chain, Up-to-Celo will no longer be able to "
         "vote using your previously delegated voting power. If you change your mind, you "
         f"can delegate again to:\n<code>{bot_wallet}</code>\nusing <code>/delegate</code>."
     )
@@ -1379,7 +1322,7 @@ async def admin_stats_handler(
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     await update.message.reply_text(
-        "Celo GovAI Hub — Admin Stats\n"
+        "Up-to-Celo — Admin Stats\n"
         f"Generated: {now_utc}\n\n"
         "Users\n"
         f"  Subscribers:   {total_subscribers}\n"
@@ -1427,7 +1370,7 @@ async def admin_broadcast_handler(
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"Celo GovAI Hub Announcement\n\n{message_text}",
+                text=f"Up-to-Celo Announcement\n\n{message_text}",
             )
             ok_count += 1
         except Exception as exc:
@@ -1526,14 +1469,14 @@ async def govstatus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "✅ Delegation detected on-chain!\n\n"
             f"Wallet: {user_wallet}\n"
             f"Delegate: {bot_wallet}\n\n"
-            "You are now part of the Celo GovAI Hub.\n"
+            "You are now part of the Up-to-Celo Governance Hub.\n"
             "You can start participating in on-chain votes directly from Telegram with:\n"
             "/vote <proposal_id> YES|NO|ABSTAIN"
         )
     else:
         await db.set_delegation_status(user_id, delegated=False)
         message = (
-            "⚠️ Delegation not detected to the Celo GovAI Hub agent.\n\n"
+            "⚠️ Delegation not detected to the Up-to-Celo agent.\n\n"
             f"Wallet: {user_wallet}\n"
             f"Current delegate: {delegate}\n\n"
             "Make sure you have submitted and confirmed a delegation transaction to the bot "
@@ -1575,8 +1518,6 @@ async def vote_command_handler(
         return
 
     user_record = await db.get_user(user_id)
-    if user_record:
-        user_record.delegated_power = True  # FIXME: TEMPORARY BYPASS FOR TESTING
     if not user_record or not getattr(user_record, "delegated_power", False):
         await update.message.reply_text(
             "You need to delegate your voting power first using /delegate before casting votes."

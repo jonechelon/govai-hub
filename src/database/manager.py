@@ -135,6 +135,75 @@ class DatabaseManager:
                 user.subscribed = subscribed
         logger.info("[DB] User %s subscription updated: %s", user_id, subscribed)
 
+    # ─── set_preferred_network ───────────────────────────────────────────────
+
+    async def set_preferred_network(self, user_id: int, preferred_network: str) -> None:
+        """Set user's governance network preference.
+
+        Args:
+            user_id: Telegram user_id.
+            preferred_network: "mainnet" | "alfajores".
+        """
+        normalized = preferred_network.strip().lower()
+        if normalized not in {"mainnet", "alfajores"}:
+            raise ValueError(f"Invalid preferred_network: {preferred_network!r}")
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    update(User)
+                    .where(User.user_id == user_id)
+                    .values(preferred_network=normalized)
+                )
+        logger.info(
+            "[DB] preferred_network updated | user=%s | network=%s",
+            user_id,
+            normalized,
+        )
+
+    # ─── toggle_notifications_enabled ────────────────────────────────────────
+
+    async def toggle_notifications_enabled(self, user_id: int) -> bool:
+        """Invert notifications_enabled for the user and return the new value.
+
+        Returns:
+            The new boolean value of notifications_enabled.
+
+        Raises:
+            ValueError: if the user does not exist.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(User).where(User.user_id == user_id)
+                )
+                user = result.scalar_one_or_none()
+                if user is None:
+                    raise ValueError(f"User not found: {user_id}")
+                user.notifications_enabled = not bool(user.notifications_enabled)
+                new_value = bool(user.notifications_enabled)
+
+        logger.info(
+            "[DB] notifications_enabled toggled | user=%s | enabled=%s",
+            user_id,
+            new_value,
+        )
+        return new_value
+
+    # ─── get_all_subscribers_with_notifications_enabled ──────────────────────
+
+    async def get_all_subscribers_with_notifications_enabled(self) -> list[int]:
+        """Return user_ids for subscribed users with notifications_enabled=True."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(User.user_id).where(
+                        User.subscribed == True,  # noqa: E712
+                        User.notifications_enabled == True,  # noqa: E712
+                    )
+                )
+                return list(result.scalars().all())
+
     # ─── get_all_subscribers ─────────────────────────────────────────────────
 
     async def get_all_subscribers(self) -> list[int]:
