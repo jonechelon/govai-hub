@@ -1287,79 +1287,27 @@ async def proposal_handler(
         )
         return
 
-    def _escape_html(value: object) -> str:
-        """Escape dynamic values for Telegram HTML parse mode."""
-        return html.escape(str(value), quote=False)
-
-    summary_raw = proposal_data.get("summary", "N/A")
-    formatted_summary = str(summary_raw)
-    summary_dict: dict | None = None
-
-    if isinstance(summary_raw, dict):
-        summary_dict = summary_raw
-    elif isinstance(summary_raw, str):
-        try:
-            candidate = ast.literal_eval(summary_raw)
-        except (ValueError, SyntaxError):
-            candidate = None
-        if isinstance(candidate, dict):
-            summary_dict = candidate
-
-    if (
-        isinstance(summary_dict, dict)
-        and all(
-            k in summary_dict for k in ("changes", "cost", "importance")
-        )
-        and all(
-            isinstance(summary_dict.get(k), list)
-            for k in ("changes", "cost", "importance")
-        )
-    ):
-        changes_list: list = summary_dict.get("changes", [])
-        cost_list: list = summary_dict.get("cost", [])
-        importance_list: list = summary_dict.get("importance", [])
-
-        changes_text = " ".join(
-            str(x).strip() for x in changes_list if str(x).strip()
-        )
-        cost_text = " ".join(str(x).strip() for x in cost_list if str(x).strip())
-        importance_text = " ".join(
-            str(x).strip() for x in importance_list if str(x).strip()
-        )
-
-        formatted_summary = "\n\n".join([changes_text, cost_text, importance_text]).strip()
-
-    formatted_summary_html = _escape_html(formatted_summary)
-
-    title = _escape_html(proposal_data.get("title", "N/A"))
-    date_created = _escape_html(proposal_data.get("date_created", "N/A"))
-    author = _escape_html(proposal_data.get("author", "N/A"))
-    status = _escape_html(proposal_data.get("status", "N/A"))
-    discussions_to = _escape_html(proposal_data.get("discussions_to", "N/A"))
-    date_executed = _escape_html(proposal_data.get("date_executed", "N/A"))
-    source_url = _escape_html(description_url)
+    # The AI now outputs structured HTML directly — no dict parsing needed.
+    summary = proposal_data.get("summary", "N/A")
 
     final_text = (
-        f"<b>Celo Governance Proposal ID:</b> {proposal_id}\n"
-        f"<b>Source:</b> {source_url}\n"
-        f"<b>Title:</b> {title}\n"
-        f"<b>Date Created:</b> {date_created}\n"
-        f"<b>Author:</b> {author}\n"
-        f"<b>Status:</b> {status}\n"
-        f"<b>Discussions-To:</b> {discussions_to}\n"
-        f"<b>Date Executed:</b> {date_executed}\n\n"
-        f"💡 <b>AI Summary (ELI5)</b>\n"
-        f"{formatted_summary_html}"
+        f"🏛️ <b>Celo Governance Proposal #{proposal_id}</b>\n"
+        f"🔗 <a href='{description_url}'>Source</a>\n\n"
+        "💡 <b>AI Summary</b>\n\n"
+        f"{summary}"
     )
 
     try:
         await loading_msg.edit_text(
-            final_text,
+            text=final_text,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-    except telegram.error.BadRequest:
-        await loading_msg.edit_text(final_text, disable_web_page_preview=True)
+    except Exception as exc:
+        logger.warning(
+            "[GOV] Failed to send HTML summary, falling back to raw text | error: %s", exc
+        )
+        await _safe_edit(loading_msg, final_text)
 
 
 async def delegate_handler(

@@ -250,15 +250,15 @@ async def generate_proposal_summary(text: str) -> dict[str, str]:
             else "N/A"
         )
 
-    # Second step — regenerate summary with strict 3-section structure
+    # Second step — regenerate summary with strict 3-section HTML structure
     system_prompt = (
         "You are an expert blockchain governance analyst for the Celo ecosystem.\n"
         "Your task is to summarize the provided governance proposal text.\n"
-        "You MUST structure your response in EXACTLY 3 short sections, using the following emojis and bold titles:\n\n"
-        "👶 **ELI5:** [Explain the core idea in 1-2 simple sentences that a beginner would understand.]\n"
-        "⚙️ **Details:** [Summarize the technical, financial, or mechanical changes being proposed.]\n"
-        "🌍 **Impact:** [Explain why this matters to the Celo network and what happens if it passes.]\n\n"
-        "Keep it concise, objective, and easy to read on a mobile Telegram interface. Do not add any intro or outro text, just the 3 sections."
+        "You MUST structure your response in EXACTLY 3 short sections, using the following emojis and bold HTML tags:\n\n"
+        "👶 <b>ELI5:</b> [Explain the core idea in 1-2 simple sentences that a beginner would understand.]\n"
+        "⚙️ <b>Details:</b> [Summarize the technical, financial, or mechanical changes being proposed.]\n"
+        "🌍 <b>Impact:</b> [Explain why this matters to the Celo network and what happens if it passes.]\n\n"
+        "Keep it concise, objective, and easy to read on a mobile Telegram interface. Do not add any intro or outro text. Output ONLY the formatted HTML text, avoiding markdown asterisks."
     )
 
     summary_user_prompt = f"Proposal text:\n\n{text}"
