@@ -155,13 +155,21 @@ class DigestScheduler:
         try:
             logger.info("[GOVERNANCE] Polling job started")
 
-            # 1. Fetch new proposals from GovernanceFetcher
+            # 1. Fetch last block from DB, then fetch new proposals in a thread
+            db = DatabaseManager()
+            last_block_str = await db.get_system_state("governance_last_block")
+            last_block = int(last_block_str) if last_block_str else None
+
             fetcher = GovernanceFetcher()
-            proposals = fetcher.fetch_new_proposals()
+            proposals, new_last_block = await asyncio.to_thread(
+                fetcher.fetch_new_proposals, last_block
+            )
             logger.info("[GOVERNANCE] Found %d new proposals", len(proposals))
 
+            if new_last_block is not None:
+                await db.set_system_state("governance_last_block", str(new_last_block))
+
             # 2. Log each proposal to DB (idempotent)
-            db = DatabaseManager()
             for proposal in proposals:
                 await db.log_governance_alert(proposal)
 

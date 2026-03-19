@@ -254,6 +254,15 @@ class GovernanceAlert(Base):
     )
 
 
+class SystemState(Base):
+    """Global key-value store for persistent bot state (survives deploys)."""
+
+    __tablename__ = "system_state"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
 class GovernanceVote(Base):
     """Stores governance vote intents per user and proposal."""
 

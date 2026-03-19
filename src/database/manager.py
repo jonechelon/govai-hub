@@ -40,6 +40,7 @@ from src.database.models import (
     FetcherLog,
     GovernanceVote,
     GovernanceAlert,
+    SystemState,
     User,
     UserAppFilter,
     init_db as models_init_db,
@@ -791,6 +792,43 @@ class DatabaseManager:
             proposal_id,
             tx_hash,
         )
+
+    # ─── system state (persistent key-value) ─────────────────────────────────
+
+    async def get_system_state(self, key: str) -> str | None:
+        """Retrieve a key-value pair from the system_state table.
+
+        Args:
+            key: State key to look up (e.g. "governance_last_block").
+
+        Returns:
+            The stored string value, or None if the key does not exist.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(SystemState).where(SystemState.key == key)
+                )
+                row = result.scalar_one_or_none()
+                return row.value if row else None
+
+    async def set_system_state(self, key: str, value: str) -> None:
+        """Insert or update a key-value pair in the system_state table.
+
+        Args:
+            key: State key (max 50 chars).
+            value: State value to persist (max 255 chars).
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(SystemState).where(SystemState.key == key)
+                )
+                row = result.scalar_one_or_none()
+                if row:
+                    row.value = value
+                else:
+                    session.add(SystemState(key=key, value=value))
 
 
 db = DatabaseManager()

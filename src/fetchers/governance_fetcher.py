@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from web3 import Web3
 from web3.exceptions import BlockNotFound, ContractLogicError
 
 from src.utils.env_validator import get_env_or_fail
-from src.utils.paths import CACHE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +103,6 @@ GOVERNANCE_ABI_MINIMAL: list[dict[str, Any]] = [
     },
 ]
 
-CACHE_PATH = CACHE_DIR / "governance_last_block.json"
 BLOCKS_LOOKBACK = 1800  # ~5h on Celo (~2s/block)
 RPC_TIMEOUT = 10  # seconds
 RETRY_DELAYS = [2, 4, 8]  # backoff in seconds
@@ -425,28 +421,34 @@ class GovernanceFetcher:
             else None
         )
 
-    def fetch_new_proposals(self, from_block: int | None = None) -> list[dict]:
+    def fetch_new_proposals(
+        self, last_processed_block: int | None = None
+    ) -> tuple[list[dict], int | None]:
         """Fetch newly queued governance proposals from Celo.
 
-        This method is synchronous; callers should run it in an executor
-        when using from async contexts.
+        This method is synchronous; callers must run it via asyncio.to_thread
+        when calling from an async context to avoid blocking the event loop.
 
         Args:
-            from_block: Optional starting block number. When None, uses
-                cached last processed block if available, or current block
-                minus BLOCKS_LOOKBACK.
+            last_processed_block: Last block number already processed (stored in DB).
+                When None, falls back to current_block - BLOCKS_LOOKBACK.
 
         Returns:
-            List of proposal dicts derived from ProposalQueued events.
-            Never raises; returns [] on failure.
+            Tuple of (proposals, current_block):
+              - proposals: list of proposal dicts from ProposalQueued events.
+              - current_block: the chain head at fetch time, or None on failure.
+            Never raises; returns ([], None) on any failure.
         """
         try:
             w3 = self._w3_primary
             current_block = self._get_current_block_with_retry(w3)
             if current_block is None or current_block <= 0:
-                return []
+                return [], None
 
-            start_block = self._resolve_from_block(from_block, current_block)
+            if last_processed_block is not None:
+                start_block = max(0, int(last_processed_block) + 1)
+            else:
+                start_block = max(0, current_block - BLOCKS_LOOKBACK)
 
             contract = w3.eth.contract(
                 address=GOVERNANCE_ADDRESS, abi=GOVERNANCE_ABI_MINIMAL
@@ -457,14 +459,13 @@ class GovernanceFetcher:
             )
             proposals = [self._event_to_dict(e) for e in events]
 
-            self._save_cache(current_block)
             logger.info(
                 "[GOVERNANCE] Scanned blocks #%s→#%s | found: %s proposals",
                 f"{start_block:,}",
                 "latest",
                 len(proposals),
             )
-            return proposals
+            return proposals, current_block
 
         except BlockNotFound as exc:
             logger.warning("[GOVERNANCE] Block not found: %s", exc)
@@ -473,7 +474,7 @@ class GovernanceFetcher:
         except Exception as exc:  # noqa: BLE001
             logger.exception("[GOVERNANCE] Unexpected error: %s", exc)
 
-        return []
+        return [], None
 
     def _get_current_block_with_retry(self, w3: Web3) -> int | None:
         """Get current block number with retry and fallback provider."""
@@ -493,19 +494,6 @@ class GovernanceFetcher:
                         "[GOVERNANCE] Switching to fallback RPC for block_number"
                     )
         return None
-
-    def _resolve_from_block(self, from_block: int | None, current_block: int) -> int:
-        """Decide starting block based on input, cache, or lookback."""
-        if from_block is not None:
-            return max(0, int(from_block))
-
-        cached = self._load_cache()
-        if cached is not None:
-            last_block = cached.get("last_block")
-            if isinstance(last_block, int) and last_block >= 0:
-                return last_block + 1
-
-        return max(0, current_block - BLOCKS_LOOKBACK)
 
     def _get_proposal_events_with_retry(
         self,
@@ -562,27 +550,4 @@ class GovernanceFetcher:
             "event_type": "queued",
         }
 
-    def _load_cache(self) -> dict | None:
-        """Load last processed block from cache file."""
-        if not CACHE_PATH.exists():
-            return None
-        try:
-            data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                return None
-            return data
-        except (OSError, json.JSONDecodeError):
-            return None
-
-    def _save_cache(self, current_block: int) -> None:
-        """Persist last processed block to cache file."""
-        try:
-            CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            payload = {"last_block": int(current_block)}
-            CACHE_PATH.write_text(
-                json.dumps(payload, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            logger.warning("[GOVERNANCE] Cache save failed: %s", exc)
 
