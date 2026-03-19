@@ -94,7 +94,31 @@ def get_digest_keyboard(digest_id: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🤖 Ask AI", callback_data=f"ask:{digest_id}"),
         InlineKeyboardButton("⚙️ Settings", callback_data="settings:open"),
     ]
-    return InlineKeyboardMarkup([row1, row2])
+    row3 = [
+        InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu:main"),
+    ]
+    return InlineKeyboardMarkup([row1, row2, row3])
+
+
+def get_wallet_keyboard(user_network: str = "mainnet") -> InlineKeyboardMarkup:
+    """Return the keyboard for the Wallet menu."""
+    network_btn_text = "🍪 Alfajores" if user_network == "alfajores" else "🟡 Mainnet"
+    keyboard = [
+        [
+            InlineKeyboardButton("⭐️ Premium", callback_data="menu:premium"),
+            InlineKeyboardButton("🔍 Gov Status", callback_data="gov:status"),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{network_btn_text} Network",
+                callback_data="net:switch",
+            )
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu:main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
 def get_links_keyboard(digest_id: str) -> InlineKeyboardMarkup:
@@ -120,12 +144,6 @@ def get_details_keyboard(digest_id: str) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("🔗 Links",      callback_data=f"links:{digest_id}"),
             InlineKeyboardButton("🤖 Ask AI",     callback_data=f"ask:{digest_id}"),
-        ],
-        [
-            InlineKeyboardButton(
-                "🔍 Search app...",
-                switch_inline_query_current_chat="",
-            ),
         ],
         [
             InlineKeyboardButton("⬅️ Back",       callback_data=f"back:{digest_id}"),
@@ -296,3 +314,11 @@ def governance_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("« Back to Main Menu", callback_data="start"),
         ],
     ])
+
+
+def get_governance_keyboard() -> InlineKeyboardMarkup:
+    """Return the keyboard for the Governance Hub."""
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu:main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)

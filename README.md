@@ -1,4 +1,4 @@
-# Celo GovAI Hub 🌿
+# 🍪 Celo GovAI Hub 🟡
 
 **Be up-to-date on the Celo Blockchain.**
 
@@ -12,7 +12,7 @@
 
 > 💡 **The UX Problem We Solve:**
 > The traditional Web3 governance funnel is broken. Over 70% of users drop off between discovering a proposal, opening a dApp, connecting a wallet, and finally signing an on-chain transaction. 
-> 
+>
 > **With Celo GovAI Hub**, once `LockedGold` delegation is in place, governance becomes a frictionless, mobile-native interaction. You vote directly from Telegram using a single, fast command: `/vote <id> YES|NO|ABSTAIN` (e.g., `/vote 47 YES`).
 
 **Try it:** [@CeloGovAI_bot](https://t.me/CeloGovAI_bot)

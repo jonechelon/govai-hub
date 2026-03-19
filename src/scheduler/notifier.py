@@ -224,8 +224,11 @@ class Notifier:
                     extract_proposal_text, alert.description_url
                 )
                 if proposal_text and proposal_text != FALLBACK_TEXT:
-                    summary = await generate_proposal_summary(proposal_text)
-                    ai_summary_safe = escape_markdown(summary, version=2)
+                    proposal_data = await generate_proposal_summary(proposal_text)
+                    ai_summary_safe = escape_markdown(
+                        proposal_data.get("summary", "N/A"),
+                        version=2,
+                    )
         except Exception as exc:
             logger.warning(
                 "[GOVERNANCE] AI summary generation failed | id=%s | error=%s",

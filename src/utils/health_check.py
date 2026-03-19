@@ -14,16 +14,16 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from aiohttp import web
 
 from src.utils.env_validator import get_env_or_fail
+from src.utils.paths import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 # Path to the status file written by HealthChecker._run_check()
-STATUS_FILE = Path("data/status.json")
+STATUS_FILE = DATA_DIR / "status.json"
 
 # Module-level state updated by set_last_digest_at() (called from Notifier)
 _uptime_start = time.time()

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, ContextTypes
@@ -17,6 +17,7 @@ from src.bot.handlers import (
     PLAN_30D_CUSD,
     PLAN_7D_CUSD,
     PREMIUM_MESSAGE,
+    GOVERNANCE_HUB_MESSAGE,
     WELCOME_MESSAGE,
 )
 from src.bot.keyboards import (
@@ -26,6 +27,8 @@ from src.bot.keyboards import (
     get_digest_keyboard,
     get_links_keyboard,
     get_main_keyboard,
+    get_governance_keyboard,
+    get_wallet_keyboard,
     get_premium_keyboard,
     get_premium_plan_keyboard,
     get_settings_keyboard,
@@ -60,10 +63,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return  # silently ignore category header buttons
         elif data == "start":
             await _handle_start(query, user_id)
+        elif data == "menu:main":
+            await _handle_start(query, user_id)
+        elif data == "governance:open":
+            await _handle_governance_open(query)
         elif data == "digest:latest":
             await _handle_digest_latest(query, context, user_id)
         elif data == "wallet:open":
             await _handle_wallet_open(query, user_id)
+        elif data == "menu:premium":
+            await _handle_premium_open(query, context, user_id)
         elif data.startswith("details:"):
             _, digest_id = data.split(":", 1)
             await _handle_details(query, context, digest_id)
@@ -106,6 +115,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _handle_govhistory(query)
         elif data == "govstatus":
             await _handle_govstatus(query, user_id)
+        elif data == "gov:status":
+            await _handle_govstatus(query, user_id)
         elif data == "resubscribe":
             await _handle_resubscribe(query, user_id)
         else:
@@ -144,7 +155,9 @@ async def _handle_start(query, user_id: int) -> None:
             reply_markup=main_kb,
             parse_mode=ParseMode.HTML,
         )
-    except BadRequest:
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
         try:
             await query.message.reply_text(
                 WELCOME_MESSAGE,
@@ -169,22 +182,20 @@ async def _handle_wallet_open(query, user_id: int) -> None:
 
     user_record = await db.get_user(user_id)
     preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
-    notifications_enabled = getattr(user_record, "notifications_enabled", True)
-    main_kb = get_main_keyboard(
-        preferred_network=preferred_network,
-        notifications_enabled=notifications_enabled,
-    )
+    wallet_kb = get_wallet_keyboard(preferred_network)
 
     try:
         await query.edit_message_text(
             text=text,
-            reply_markup=main_kb,
+            reply_markup=wallet_kb,
         )
-    except BadRequest:
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
         try:
             await query.message.reply_text(
                 text=text,
-                reply_markup=main_kb,
+                reply_markup=wallet_kb,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -325,8 +336,10 @@ async def _handle_details(query, context: ContextTypes.DEFAULT_TYPE, digest_id: 
             reply_markup=get_details_keyboard(digest_id),
             parse_mode=ParseMode.HTML,
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
     logger.info("[DETAILS] Digest %s loaded for user in details view", digest_id)
 
 
@@ -401,11 +414,16 @@ async def _handle_links(
     )
 
     if not links:
-        await query.edit_message_text(
-            "No links found for this digest.\n\n"
-            "The digest cache may have expired (TTL: 24h).",
-            reply_markup=get_links_keyboard(digest_id),
-        )
+        try:
+            await query.edit_message_text(
+                "No links found for this digest.\n\n"
+                "The digest cache may have expired (TTL: 24h).",
+                reply_markup=get_links_keyboard(digest_id),
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                return
+            raise
         return
 
     lines = [f"Links from this digest ({len(links)} found)\n"]
@@ -424,11 +442,16 @@ async def _handle_links(
     if len(full_text) > 4000:
         full_text = full_text[:3950] + "\n\n… (truncated)"
 
-    await query.edit_message_text(
-        full_text,
-        reply_markup=get_links_keyboard(digest_id),
-        disable_web_page_preview=True,
-    )
+    try:
+        await query.edit_message_text(
+            full_text,
+            reply_markup=get_links_keyboard(digest_id),
+            disable_web_page_preview=True,
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 async def _handle_back(query, user_id: int) -> None:
@@ -448,8 +471,10 @@ async def _handle_back(query, user_id: int) -> None:
             reply_markup=get_digest_keyboard(digest_id),
             parse_mode=ParseMode.HTML,
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
     logger.info("[DETAILS] Back to digest view | digest=%s | user=%d", digest_id, user_id)
 
 
@@ -528,8 +553,10 @@ async def _handle_settings_close(query, user_id: int) -> None:
             parse_mode=ParseMode.HTML,
             reply_markup=main_kb,
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 async def _refresh_keyboard_after_preference_change(query, user_id: int) -> None:
@@ -543,6 +570,7 @@ async def _refresh_keyboard_after_preference_change(query, user_id: int) -> None
 
     message_text = getattr(getattr(query, "message", None), "text", "") or ""
     is_settings_root = message_text.startswith("⚙️ Celo GovAI Hub — Select Your Apps")
+    is_wallet_menu = message_text.startswith("👛 Set Wallet")
 
     if is_settings_root:
         user_apps = await db.get_user_apps_by_category(user_id)
@@ -551,6 +579,8 @@ async def _refresh_keyboard_after_preference_change(query, user_id: int) -> None
             preferred_network=preferred_network,
             notifications_enabled=notifications_enabled,
         )
+    elif is_wallet_menu:
+        reply_markup = get_wallet_keyboard(preferred_network)
     else:
         reply_markup = get_main_keyboard(
             preferred_network=preferred_network,
@@ -694,8 +724,10 @@ async def _handle_premium_plan(query, user_id: int, days: int) -> None:
             f"/confirmpayment 0xTxHash",
             reply_markup=get_premium_plan_keyboard(days),
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 async def _handle_premium_confirm(query) -> None:
@@ -707,8 +739,10 @@ async def _handle_premium_confirm(query) -> None:
             "Find your tx hash at:\n"
             "https://celo.blockscout.com",
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 async def _handle_premium_back(query, user_id: int) -> None:
@@ -736,8 +770,10 @@ async def _handle_premium_back(query, user_id: int) -> None:
             f"{wallet_line}",
             reply_markup=get_premium_keyboard(),
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 # ── resubscribe ────────────────────────────────────────────────────────────────
@@ -748,34 +784,63 @@ async def _handle_resubscribe(query, user_id: int) -> None:
 
     user = await db.get_user(user_id)
     if user and user.subscribed:
-        await query.edit_message_text(
-            "You are already subscribed!\n\n"
-            f"Next digest: {_next_digest_str()}"
-        )
+        try:
+            await query.edit_message_text(
+                "You are already subscribed!\n\n"
+                f"Next digest: {_next_digest_str()}"
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                return
+            raise
         return
 
     await db.update_subscription(user_id, True)
     logger.info("[RESUBSCRIBE] User re-subscribed | user=%s", user_id)
 
-    await query.edit_message_text(
-        "Welcome back! You are now re-subscribed.\n\n"
-        f"Next digest: {_next_digest_str()}\n\n"
-        "Use /settings to customize which apps you follow."
-    )
+    try:
+        await query.edit_message_text(
+            "Welcome back! You are now re-subscribed.\n\n"
+            f"Next digest: {_next_digest_str()}\n\n"
+            "Use /settings to customize which apps you follow."
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 # ── help ───────────────────────────────────────────────────────────────────────
 
 async def _handle_help_open(query, user_id: int) -> None:
     """Show help message inline."""
-    user_record = await db.get_user(user_id)
-    preferred_network = getattr(user_record, "preferred_network", "mainnet") or "mainnet"
-    notifications_enabled = getattr(user_record, "notifications_enabled", True)
-    main_kb = get_main_keyboard(
-        preferred_network=preferred_network,
-        notifications_enabled=notifications_enabled,
+    logger.debug("[HELP] help:open | user=%d", user_id)
+
+    help_kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "⬅️ Back to Menu",
+                    callback_data="start",
+                )
+            ]
+        ]
     )
-    await query.message.reply_text(HELP_MESSAGE, reply_markup=main_kb)
+
+    try:
+        await query.edit_message_text(
+            HELP_MESSAGE,
+            reply_markup=help_kb,
+            parse_mode=ParseMode.HTML,
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        await query.message.reply_text(
+            HELP_MESSAGE,
+            reply_markup=help_kb,
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def _handle_govlist(query) -> None:
@@ -787,8 +852,10 @@ async def _handle_govlist(query) -> None:
         await query.edit_message_text(
             "⏳ Fetching active governance proposals from the Celo network...",
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
     result = await get_active_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
     queued = result.get("Queued", [])
@@ -811,8 +878,25 @@ async def _handle_govlist(query) -> None:
             parse_mode=ParseMode.HTML,
             reply_markup=governance_keyboard(),
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
+
+
+async def _handle_governance_open(query) -> None:
+    """Show the Governance Hub menu."""
+    try:
+        await query.edit_message_text(
+            text=GOVERNANCE_HUB_MESSAGE,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=get_governance_keyboard(),
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 async def _handle_govhistory(query) -> None:
@@ -824,8 +908,10 @@ async def _handle_govhistory(query) -> None:
         await query.edit_message_text(
             "⏳ Fetching governance history from the Celo network...",
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
     proposal_ids = await get_historical_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
     ids_str = ", ".join(str(x) for x in proposal_ids) if proposal_ids else "None"
@@ -843,8 +929,10 @@ async def _handle_govhistory(query) -> None:
             parse_mode=ParseMode.HTML,
             reply_markup=governance_keyboard(),
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 async def _handle_govstatus(query, user_id: int) -> None:
@@ -871,8 +959,10 @@ async def _handle_govstatus(query, user_id: int) -> None:
             parse_mode=ParseMode.HTML,
             reply_markup=governance_keyboard(),
         )
-    except BadRequest:
-        pass
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
 
 
 # ── export for app.py ──────────────────────────────────────────────────────────

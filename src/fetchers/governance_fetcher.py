@@ -12,6 +12,7 @@ from web3 import Web3
 from web3.exceptions import BlockNotFound, ContractLogicError
 
 from src.utils.env_validator import get_env_or_fail
+from src.utils.paths import CACHE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ GOVERNANCE_ABI_MINIMAL: list[dict[str, Any]] = [
     },
 ]
 
-CACHE_PATH = Path("data/cache/governance_last_block.json")
+CACHE_PATH = CACHE_DIR / "governance_last_block.json"
 BLOCKS_LOOKBACK = 1800  # ~5h on Celo (~2s/block)
 RPC_TIMEOUT = 10  # seconds
 RETRY_DELAYS = [2, 4, 8]  # backoff in seconds

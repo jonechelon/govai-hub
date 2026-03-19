@@ -25,6 +25,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -286,19 +287,19 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        # Fallback migration for local SQLite development only.
-        # SQLite does not support transactional DDL in the same way as Postgres,
-        # so we attempt each ALTER TABLE individually and silently ignore errors
-        # that indicate the column already exists.
-        if "sqlite" in str(engine.url):
-            _SQLITE_MIGRATIONS = [
-                "ALTER TABLE governance_alerts ADD COLUMN deposit_cusd FLOAT;",
-                "ALTER TABLE users ADD COLUMN preferred_network VARCHAR(16) DEFAULT 'mainnet';",
-                "ALTER TABLE users ADD COLUMN notifications_enabled BOOLEAN DEFAULT 1;",
-            ]
-            for statement in _SQLITE_MIGRATIONS:
-                try:
-                    await conn.execute(text(statement))
-                except Exception:
-                    # Column already exists — safe to ignore
-                    pass
+    # Incremental schema migrations — run on every startup for both SQLite and PostgreSQL.
+    # Each statement runs in its own transaction so that a failure (column already exists)
+    # triggers a clean ROLLBACK without aborting subsequent migrations.
+    # PostgreSQL raises ProgrammingError; SQLite raises OperationalError.
+    _MIGRATIONS = [
+        "ALTER TABLE governance_alerts ADD COLUMN deposit_cusd FLOAT;",
+        "ALTER TABLE users ADD COLUMN preferred_network VARCHAR DEFAULT 'mainnet';",
+        "ALTER TABLE users ADD COLUMN notifications_enabled BOOLEAN DEFAULT true;",
+    ]
+    for statement in _MIGRATIONS:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(statement))
+        except (ProgrammingError, OperationalError):
+            # Column already exists — safe to ignore
+            pass

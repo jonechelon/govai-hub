@@ -186,65 +186,98 @@ class GroqClient:
 groq_client = GroqClient()
 
 
-async def generate_proposal_summary(text: str) -> dict:
-    """Extract metadata and generate an ELI5 summary from a Celo governance proposal.
-
-    The LLM is instructed to respond exclusively with a valid JSON object
-    containing proposal metadata fields and a plain-language ELI5 summary.
+async def generate_proposal_summary(text: str) -> dict[str, str]:
+    """Extract proposal metadata and generate an ELI5 summary.
 
     Args:
         text: Cleaned proposal description text extracted from the source URL.
 
     Returns:
-        A dict with keys: title, date_created, author, status, discussions_to,
-        date_executed, summary. Any missing field defaults to 'N/A'.
-        Returns a fallback dict if JSON parsing fails.
+        Dict with keys: title, date_created, author, status, discussions_to,
+        date_executed, summary.
     """
-    system_prompt = (
-        "You are a Celo blockchain data extractor and analyst. "
-        "Your task is to read a Celo governance proposal text and extract structured metadata. "
-        "You MUST respond EXCLUSIVELY with a single valid JSON object — no extra text, no markdown fences. "
-        "The JSON object must contain exactly these keys: "
-        "\"title\", \"date_created\", \"author\", \"status\", "
-        "\"discussions_to\", \"date_executed\", \"summary\". "
-        "If a specific metadata field is not found in the text, return \"N/A\" for that field. "
-        "The \"summary\" field must contain an ELI5 (Explain Like I'm 5) explanation in exactly "
-        "3 bullet points answering: 1. What changes? 2. How much does it cost? "
-        "3. Why does it matter to the ecosystem?"
+    metadata_system_prompt = (
+        "You are a Celo governance proposal data extractor and summarizer.\n"
+        "Read the provided proposal text (it may contain CGP-style metadata headers).\n"
+        "Extract the following fields and return ONLY a valid JSON object with exactly "
+        "these keys (all values must be strings): "
+        "title, date_created, author, status, discussions_to, date_executed, summary.\n"
+        "If a specific metadata field is not found in the text, return 'N/A' for that field. "
+        "You may set 'summary' to 'N/A'. We will regenerate a structured summary in a second step.\n"
+        "Do not wrap the JSON in markdown fences. Do not include any other text."
     )
-    user_prompt = f"Proposal text:\n\n{text}"
+    metadata_user_prompt = f"Proposal text:\n\n{text}"
+
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "system", "content": metadata_system_prompt},
+        {"role": "user", "content": metadata_user_prompt},
     ]
-    # Increased token budget to accommodate JSON envelope + 3-bullet summary.
+
     content, _usage = await groq_client._call(
         model="llama-3.3-70b-versatile",
         messages=messages,
-        max_tokens=500,
+        max_tokens=420,
     )
 
-    _EXPECTED_KEYS = ("title", "date_created", "author", "status", "discussions_to", "date_executed", "summary")
-    _FALLBACK: dict = {k: "N/A" for k in _EXPECTED_KEYS}
-    _FALLBACK["summary"] = content or "Summary unavailable."
+    fallback = {
+        "title": "N/A",
+        "date_created": "N/A",
+        "author": "N/A",
+        "status": "N/A",
+        "discussions_to": "N/A",
+        "date_executed": "N/A",
+        "summary": "N/A",
+    }
 
     try:
-        clean = content.strip()
-        # Strip markdown code fences that some models add despite instructions.
-        if clean.startswith("```"):
-            parts = clean.split("```")
-            clean = parts[1] if len(parts) > 1 else clean
-            if clean.startswith("json"):
-                clean = clean[4:]
-        result: dict = json.loads(clean)
-        for key in _EXPECTED_KEYS:
-            if key not in result:
-                result[key] = "N/A"
-        return result
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "[GROQ] generate_proposal_summary JSON parse failed | error=%s | raw=%.200s",
-            exc,
-            content,
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        logger.warning("[GROQ] Proposal summary JSONDecodeError — returning fallback dict")
+        return fallback
+
+    if not isinstance(parsed, dict):
+        logger.warning("[GROQ] Proposal summary JSON is not an object — returning fallback dict")
+        return fallback
+
+    result: dict[str, str] = {}
+    for key in fallback.keys():
+        value = parsed.get(key, "N/A")
+        result[key] = (
+            value
+            if isinstance(value, str) and value
+            else str(value)
+            if value
+            else "N/A"
         )
-        return _FALLBACK
+
+    # Second step — regenerate summary with strict 3-section structure
+    system_prompt = (
+        "You are an expert blockchain governance analyst for the Celo ecosystem.\n"
+        "Your task is to summarize the provided governance proposal text.\n"
+        "You MUST structure your response in EXACTLY 3 short sections, using the following emojis and bold titles:\n\n"
+        "👶 **ELI5:** [Explain the core idea in 1-2 simple sentences that a beginner would understand.]\n"
+        "⚙️ **Details:** [Summarize the technical, financial, or mechanical changes being proposed.]\n"
+        "🌍 **Impact:** [Explain why this matters to the Celo network and what happens if it passes.]\n\n"
+        "Keep it concise, objective, and easy to read on a mobile Telegram interface. Do not add any intro or outro text, just the 3 sections."
+    )
+
+    summary_user_prompt = f"Proposal text:\n\n{text}"
+    summary_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": summary_user_prompt},
+    ]
+
+    try:
+        summary_text, _summary_usage = await groq_client._call(
+            model="llama-3.3-70b-versatile",
+            messages=summary_messages,
+            max_tokens=220,
+        )
+        result["summary"] = summary_text.strip() if summary_text else "N/A"
+    except Exception as exc:
+        logger.warning(
+            "[GROQ] Structured summary regeneration failed — using fallback summary | error=%s",
+            exc,
+        )
+
+    return result

@@ -9,7 +9,8 @@ from __future__ import annotations
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
+
+from src.utils.paths import LOGS_DIR
 
 
 def setup_logger(name: str = "celo-govai-hub") -> logging.Logger:
@@ -42,9 +43,8 @@ def setup_logger(name: str = "celo-govai-hub") -> logging.Logger:
 
     # File handlers — only when LOG_TO_FILE=true (typically local dev)
     if log_to_file:
-        data_dir = Path(os.getenv("DATA_DIR", "data"))
-        log_dir = data_dir / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = LOGS_DIR
+        log_dir.mkdir(parents=True, exist_ok=True)  # idempotent
 
         bot_log = log_dir / "bot.log"
         err_log = log_dir / "errors.log"
