@@ -51,18 +51,23 @@ class GovernanceExecutor:
     This job:
         1. Aggregates pending vote intents from the database by proposal_id.
         2. Computes the majority choice (YES/NO/ABSTAIN) per proposal.
-        3. Applies gas price safety checks and transaction simulation.
-        4. Signs and sends a single governance vote transaction per proposal
-           using the BOTWALLET keys.
+        3. Verifies that the configured GOVERNANCE_PRIVATE_KEY matches GOVERNANCE_DELEGATE_ADDRESS.
+        4. Applies gas price safety checks and transaction simulation.
+        5. Signs and sends a single governance vote transaction per proposal
+           using the dedicated GOVERNANCE wallet (separate from the treasury BOT_WALLET).
     """
 
     def __init__(self) -> None:
         rpc_url = get_env_or_fail("CELO_RPC_URL")
         self._w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
-        self._bot_wallet_address = Web3.to_checksum_address(
-            get_env_or_fail("BOT_WALLET_ADDRESS")
+
+        # Governance wallet — dedicated to signing on-chain vote transactions.
+        # Kept strictly separate from BOT_WALLET (treasury) for security isolation.
+        self._governance_private_key = get_env_or_fail("GOVERNANCE_PRIVATE_KEY")
+        self._governance_delegate_address = Web3.to_checksum_address(
+            get_env_or_fail("GOVERNANCE_DELEGATE_ADDRESS")
         )
-        self._bot_wallet_private_key = get_env_or_fail("BOT_WALLET_PRIVATE_KEY")
+
         self._contract: Contract = self._w3.eth.contract(
             address=GOVERNANCE_ADDRESS,
             abi=GOVERNANCE_VOTE_ABI,
@@ -80,16 +85,53 @@ class GovernanceExecutor:
         except Exception as exc:  # noqa: BLE001
             logger.exception("[GOVERNANCE] Executor job failed: %s", exc)
 
+    def _verify_governance_wallet(self) -> bool:
+        """Verify that GOVERNANCE_PRIVATE_KEY derives the expected GOVERNANCE_DELEGATE_ADDRESS.
+
+        Returns:
+            True if the derived address matches the configured delegate address.
+
+        Side-effects:
+            Logs an error and returns False on any mismatch or derivation failure.
+        """
+        try:
+            derived_address = self._w3.eth.account.from_key(
+                self._governance_private_key
+            ).address
+            derived_checksum = Web3.to_checksum_address(derived_address)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[GOVERNANCE] Failed to derive address from GOVERNANCE_PRIVATE_KEY: %s", exc
+            )
+            return False
+
+        if derived_checksum != self._governance_delegate_address:
+            logger.error(
+                "[GOVERNANCE] Governance wallet mismatch — aborting execution cycle. "
+                "GOVERNANCE_PRIVATE_KEY derives %s but GOVERNANCE_DELEGATE_ADDRESS is %s. "
+                "Check your .env configuration.",
+                derived_checksum,
+                self._governance_delegate_address,
+            )
+            return False
+
+        return True
+
     async def _execute_pending_votes(self) -> None:
         """Fetch aggregated pending votes and execute majority decisions on-chain."""
+        # Security guard: abort the cycle if the governance wallet is misconfigured.
+        if not self._verify_governance_wallet():
+            return
+
         aggregated = await db.get_pending_votes_aggregated()
         if not aggregated:
             logger.info("[GOVERNANCE] No pending governance votes to execute")
             return
 
         logger.info(
-            "[GOVERNANCE] Executor started | pending_proposals=%s",
+            "[GOVERNANCE] Executor started | pending_proposals=%s | signer=%s",
             len(aggregated),
+            self._governance_delegate_address,
         )
 
         for item in aggregated:
@@ -133,7 +175,7 @@ class GovernanceExecutor:
                     contract=self._contract,
                     proposal_id=proposal_id,
                     vote_value=vote_value,
-                    bot_wallet_address=self._bot_wallet_address,
+                    bot_wallet_address=self._governance_delegate_address,
                 )
             except TransactionSimulationError as exc:
                 logger.error(
@@ -164,10 +206,14 @@ class GovernanceExecutor:
         vote_value: int,
         gas_price_wei: int,
     ) -> None:
-        """Build, sign, and send the governance vote transaction."""
+        """Build, sign, and send the governance vote transaction.
+
+        Uses the dedicated governance wallet (GOVERNANCE_PRIVATE_KEY / GOVERNANCE_DELEGATE_ADDRESS),
+        keeping it strictly isolated from the treasury BOT_WALLET.
+        """
         nonce = await self._run_sync(
             self._w3.eth.get_transaction_count,
-            self._bot_wallet_address,
+            self._governance_delegate_address,
         )
         chain_id = await self._run_sync(lambda: self._w3.eth.chain_id)
 
@@ -176,7 +222,7 @@ class GovernanceExecutor:
             vote_value,
         ).build_transaction(
             {
-                "from": self._bot_wallet_address,
+                "from": self._governance_delegate_address,
                 "nonce": nonce,
                 "chainId": chain_id,
                 "gasPrice": gas_price_wei,
@@ -196,7 +242,7 @@ class GovernanceExecutor:
 
         signed = self._w3.eth.account.sign_transaction(
             tx_dict,
-            private_key=self._bot_wallet_private_key,
+            private_key=self._governance_private_key,
         )
 
         tx_hash_bytes = await self._run_sync(
