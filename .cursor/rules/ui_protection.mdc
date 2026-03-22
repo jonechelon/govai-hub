@@ -1,0 +1,54 @@
+---
+alwaysApply: false
+---
+# UI Protection Contract — GovAI Hub v2.0
+
+## Existing flows that MUST NOT be broken
+
+- [📰 Latest Digest] → generates digest → buttons [📰 Details][🔗 Links][🤖 Ask AI][⚙️ Settings]
+- [⚙️ Settings] → category list → per-app toggles (enable/disable)
+- [🟢 Vote Alerts] → toggle on/off in Layer 1
+- [🟡 Mainnet] / [🍪 Alfajores] → network toggle in Layer 1
+- [💎 Premium] → plan selection → [⭐ 7 days][⭐ 30 days][✅ I sent]
+
+## Flows being UPGRADED in v2.0 (surgical edit only)
+
+- [🏛️ Governance] keyboard: replace single [⬅️ Back] with 4 buttons:
+  gov:list | gov:history | gov:stake | gov:status
+- Proposal view: inject vote buttons (vote:YES/NO/ABSTAIN:<id>) + [🤖 Create Auto-Trade if Approved]
+- Wallet flow: regex ^0x[a-fA-F0-9]{40}$ auto-registers wallet, replies "Wallet registered"
+- /payout in groups: multi-sig with SystemState persistence, RBAC via get_chat_member()
+
+## Flows being CREATED in Fase 7 (DO NOT implement before Fase 6 is complete)
+
+- [📰 Latest Digest] label → [📡 Intelligence Signals]:
+  callback `menu:digest` MUST remain unchanged; only button label changes
+  New button [📊 View Signals] → callback `digest:signals` → Groq sentiment analysis
+- [👛 Wallet & Premium] unified panel:
+  callback `menu:wallet` → [Connect Wallet] + [Buy Premium]
+  [Connect Wallet] → "Send your wallet address now" → regex auto-capture
+  [I sent] → "Checking your transaction... You will be notified automatically"
+- PaymentPoller (APScheduler every 60s):
+  checks payment_fetcher.py → web3 on-chain → UPDATE users SET tier='premium'
+  fallback manual /confirmpayment 0xTxHash MUST remain active
+- AI Summary ELI5 per proposal:
+  [🤖 AI Summary] → callback `gov:summary:<id>` → Groq ELI5 instruction
+  on timeout → reply "Summary unavailable. Try again later."
+
+## New flows being CREATED in v2.0
+
+- gov:stake callback → stCELO balance + mock conversion
+- auto_trades table → intent capture → conditional execution
+- src/a2a/server.py → POST /api/v1/intent → Telegram push
+
+## NEVER do
+
+- Do not mix ParseMode.HTML and ParseMode.MARKDOWN in the same message —
+  pick HTML and escape dynamic content with html.escape() where needed
+- Do not rewrite entire keyboards.py, callbacks.py or handlers.py
+- Do not remove any existing command handler (/ask /proposal /governance /govlist /govhistory /govstatus /vote /delegate /revoke /setwallet /premium /confirmpayment /start /help)
+- Do not rename the `menu:digest` callback even if the button label changes to "Intelligence Signals"
+- Do not remove /confirmpayment handler even after PaymentPoller is active
+- Do not use context.chat_data for persistent state
+- Do not run uvicorn in the same async thread as PTB
+- Do not display Portuguese text to the bot user (English only)
