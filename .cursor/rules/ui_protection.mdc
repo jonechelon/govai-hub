@@ -3,6 +3,20 @@ alwaysApply: false
 ---
 # UI Protection Contract — GovAI Hub v2.0
 
+<!-- ============================================================
+     §7 — Protected Flows (NEVER BREAK)
+     ============================================================ -->
+## §7 — Protected Flows (NEVER BREAK)
+
+> ⚠️ This section supersedes the legacy `## Existing flows` and
+> `## Flows being UPGRADED` blocks below. Do not remove those blocks.
+
+Flows that must never regress:
+- Digest, Settings, Vote Alerts, Mainnet/Alfajores, Premium
+- `/start`, `/ask`, `/govlist`, `/confirmpayment`, `/setwallet`
+- `menu:main`, `payout:approve:<id>`
+- `/confirmpayment` must remain active even after a future PaymentPoller is added.
+
 ## Existing flows that MUST NOT be broken
 
 - [📰 Latest Digest] → generates digest → buttons [📰 Details][🔗 Links][🤖 Ask AI][⚙️ Settings]
@@ -41,6 +55,20 @@ alwaysApply: false
 - auto_trades table → intent capture → conditional execution
 - src/a2a/server.py → POST /api/v1/intent → Telegram push
 
+<!-- ============================================================
+     §10 — Anti-Regression Rules
+     ============================================================ -->
+## §10 — Anti-Regression Rules
+
+> ⚠️ This section supersedes the legacy `## NEVER do` block below.
+> Do not remove that block.
+
+- `context.chat_data` is **PROHIBITED** — Render is stateless; use `system_state` table.
+- No `asyncio.sleep()` inside handlers.
+- `disable_web_page_preview=True` on every message that contains an inline URL.
+- `query.answer()` must **always** be the first line of every callback handler.
+- All `url=` values must start with `https://`.
+
 ## NEVER do
 
 - Do not mix ParseMode.HTML and ParseMode.MARKDOWN in the same message —
@@ -52,3 +80,146 @@ alwaysApply: false
 - Do not use context.chat_data for persistent state
 - Do not run uvicorn in the same async thread as PTB
 - Do not display Portuguese text to the bot user (English only)
+
+<!-- ============================================================
+     §1 — ParseMode
+     ============================================================ -->
+## §1 — ParseMode
+
+HTML is the exclusive parse mode for the entire project. Never use MarkdownV2.
+All dynamic data must be wrapped with html.escape() before interpolation.
+Required import at the top of any file that builds Telegram messages:
+
+```python
+# Required: HTML-safe escaping for all dynamic Telegram content
+from html import escape
+```
+
+<!-- ============================================================
+     §2 — Emoji State Taxonomy
+     Do NOT alter this mapping without opening a new phase.
+     ============================================================ -->
+## §2 — Emoji State Taxonomy
+
+| Emoji | Meaning             |
+|-------|---------------------|
+| 🟢    | Active / Live       |
+| 🔴    | Rejected / Off      |
+| ⏳    | Pending             |
+| ✅    | Approved            |
+| ⚠️    | Warning             |
+| ⏰    | Expired             |
+| 🤖    | Bot / AI action     |
+| ⬅️    | Back navigation     |
+| 💼    | Wallet              |
+| 🏛️    | Treasury            |
+
+<!-- ============================================================
+     §3 — Standard HTML Template (mandatory hierarchy)
+     ============================================================ -->
+## §3 — Standard HTML Template
+
+Mandatory message hierarchy (do not deviate):
+
+```
+<b>TITLE — Subtitle</b>
+
+<i>optional context line (max 1 line)</i>
+
+message body (max ~600 chars before truncation)
+
+🔗 <a href="URL">Link Label</a>
+```
+
+Rules:
+- Absolute maximum: **4096 chars** (Telegram hard limit).
+- Long dynamic content: truncate at **800 chars** + `…`.
+- Never use `<br>` — use `\n` for line breaks.
+
+<!-- ============================================================
+     §4 — Inline Keyboard Layout Rules
+     ============================================================ -->
+## §4 — Inline Keyboard Layout Rules
+
+- Maximum **3 buttons per row**.
+- Destructive actions must be on a **separate row**.
+- `url=` buttons must **never** share a row with `callback_data=` buttons.
+
+**Approved proposal keyboard (4 rows):**
+```
+[✅ YES]  [❌ NO]  [🤷 ABSTAIN]
+[📋 Create Auto-Trade]
+[🤖 Swap→stCELO]  [🤖 Swap→USDm]  [🤖 Stake]
+[⬅️ Back]
+```
+
+**Approved governance hub keyboard (3 rows):**
+```
+[🏛 Active Proposals]  [📜 History]
+[💧 Liquid Staking]  [📊 My Status]
+[⬅️ Back]
+```
+
+<!-- ============================================================
+     §5 — Mandatory Empty States
+     ============================================================ -->
+## §5 — Mandatory Empty States
+
+Copy canônico — nunca alterar sem nova fase:
+
+```
+# /govlist empty
+⚠️ <b>No active proposals</b>\n\nCheck back later or use History.
+
+# RPC offline
+⚠️ <b>On-chain data unavailable</b>\n\nThe RPC node is unreachable.
+
+# Wallet not registered
+💼 <b>Wallet not registered</b>\n\nSend your EVM address (0x…).
+
+# AI session expired
+⏰ <b>Session expired</b>\n\nUse /aitrade again.
+
+# No pending auto-trades
+📊 <b>No pending auto-trades</b>\n\nCreate one from an active proposal.
+```
+
+<!-- ============================================================
+     §6 — Wallet Truncation (fixed pattern)
+     ============================================================ -->
+## §6 — Wallet Truncation
+
+Fixed display pattern — never show a full address to the user:
+
+```python
+# Truncate wallet address for safe display
+def truncate_wallet(addr: str) -> str:
+    return f"{addr[:6]}…{addr[-4:]}" if len(addr) > 10 else addr
+```
+
+<!-- ============================================================
+     §8 — Mandatory DeFi Disclaimer
+     ============================================================ -->
+## §8 — Mandatory DeFi Disclaimer
+
+Every DeFi view (swap, stake, auto-trade) must include this exact line:
+
+```html
+<i>AI shortcuts open deep links — complete swaps in your wallet. The bot never holds your keys.</i>
+```
+
+<!-- ============================================================
+     §9 — Global Back Button
+     ============================================================ -->
+## §9 — Global Back Button
+
+**Required** as the last row in:
+- `get_digest_keyboard`
+- `get_governance_keyboard`
+- `get_premium_keyboard`
+- `get_settings_keyboard`
+
+**Forbidden** in: `get_main_keyboard`
+
+Callback value: `menu:main` — verify this route exists in the callback router
+before any Phase 6 UX step.
