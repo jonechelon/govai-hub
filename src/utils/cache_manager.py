@@ -208,6 +208,14 @@ class CacheManager:
         """Cache a digest for 24 hours."""
         await self.set(f"digest_{digest_id}", data, ttl_minutes=1440)
 
+    async def get_governance_active(self) -> dict | None:
+        """Return cached active governance proposals (TTL: 10min)."""
+        return await self.get("gov_active")
+
+    async def set_governance_active(self, data: dict) -> None:
+        """Cache active governance proposals for 10 minutes."""
+        await self.set("gov_active", data, ttl_minutes=10)
+
     async def invalidate_snapshot(self) -> None:
         """Force-expire the snapshot cache (e.g. before a manual digest)."""
         await self.invalidate("full_snapshot")

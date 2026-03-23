@@ -9,6 +9,7 @@ from web3 import Web3
 from web3.exceptions import BlockNotFound, ContractLogicError
 
 from src.utils.env_validator import get_env_or_fail
+from src.utils.cache_manager import cache
 
 logger = logging.getLogger(__name__)
 
@@ -246,14 +247,12 @@ async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[
     """Get an active-only governance dashboard from on-chain state.
 
     Steps:
-      1. Read raw arrays from getQueue() and getDequeue().
-      2. Remove zeros (0) and deduplicate proposal ids.
-      3. Resolve the true on-chain status for each proposal id using
+      1. Check cache for fresh data (TTL: 10min).
+      2. If miss, read raw arrays from getQueue() and getDequeue().
+      3. Remove zeros (0) and deduplicate proposal ids.
+      4. Resolve the true on-chain status for each proposal id using
          `getProposalStage(id)`.
-      4. Categorize into UX buckets:
-         - Queued
-         - Active
-      5. Sort ids desc (most recent → oldest). Ignore stage 0 / 4 / None.
+      5. Categorize into UX buckets (Queued/Active), sort and cache.
 
     Args:
         w3: Initialized Web3 instance (HTTPProvider recommended).
@@ -264,6 +263,12 @@ async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[
         {"Queued": [...], "Active": [...]}.
         Returns empty lists on failure.
     """
+    # 1. Check cache (TTL: 10min)
+    cached = await cache.get_governance_active()
+    if cached:
+        logger.debug("[GOVERNANCE] Cache hit for active proposals")
+        return cached
+
     try:
         raw = await asyncio.to_thread(
             _get_active_proposals_onchain_sync, w3, contract_address
@@ -286,10 +291,9 @@ async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[
     all_ids = sorted(queued_set | dequeued_set, reverse=True)
 
     if not all_ids:
-        return {
-            "Queued": [],
-            "Active": [],
-        }
+        res = {"Queued": [], "Active": []}
+        await cache.set_governance_active(res)
+        return res
 
     def _get_stage_sync(
         w3_sync: Web3, contract_addr: str, pid: int
@@ -347,6 +351,7 @@ async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[
         elif bucket == "Active":
             result["Active"].append(int(pid))
 
+    await cache.set_governance_active(result)
     return result
 
 
@@ -601,3 +606,26 @@ class GovernanceFetcher:
         }
 
 
+
+async def pre_warm_governance_cache() -> None:
+    """Pre-fetch active governance proposals and store them in cache.
+    
+    This is intended to be called in the background (fire-and-forget) 
+    during /start or when returning to the main menu to eliminate 
+    the UI delay when the user eventually clicks 'Governance'.
+    """
+    try:
+        # Check if cache is already fresh (< 5 minutes) to avoid redundant RPC calls
+        age = cache.get_age_minutes("gov_active")
+        if age is not None and age < 5.0:
+            logger.debug("[GOVERNANCE] Cache is still fresh (%.1f min) - skipping pre-warm", age)
+            return
+
+        logger.info("[GOVERNANCE] Pre-warming active proposals cache...")
+        rpc_url = get_env_or_fail("CELO_RPC_URL")
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+        # This will trigger the fetch and save to cache via get_active_proposals_onchain
+        await get_active_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
+        logger.info("[GOVERNANCE] Cache pre-warmed successfully")
+    except Exception as exc:
+        logger.warning("[GOVERNANCE] Pre-warm failed: %s", exc)

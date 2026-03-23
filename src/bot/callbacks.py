@@ -76,6 +76,7 @@ from src.utils.env_validator import get_env_or_fail
 from src.fetchers.governance_fetcher import (
     GOVERNANCE_ADDRESS,
     get_active_proposals_onchain,
+    pre_warm_governance_cache,
 )
 from src.fetchers.coingecko_prices import (
     collect_symbols_from_trade_suggestions,
@@ -1475,6 +1476,10 @@ async def _handle_start(query, user_id: int) -> None:
         effective_user_network(user_record) if user_record else "mainnet"
     )
     notifications_enabled = getattr(user_record, "notifications_enabled", True)
+
+    # Pre-warm governance cache in the background to reduce UI delay (P10)
+    asyncio.create_task(pre_warm_governance_cache())
+
     main_kb = get_main_keyboard(
         preferred_network=preferred_network,
         notifications_enabled=notifications_enabled,

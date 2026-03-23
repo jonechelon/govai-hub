@@ -51,6 +51,7 @@ from src.fetchers.governance_fetcher import (
     get_historical_proposals_onchain,
     get_proposal_url_onchain,
     resolve_proposal_status_key,
+    pre_warm_governance_cache,
 )
 from src.utils.env_validator import get_env_or_fail
 from src.utils.cache_manager import cache
@@ -425,6 +426,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     chain_net = effective_user_network(db_user)
     notifications_enabled = getattr(db_user, "notifications_enabled", True)
+
+    # Pre-warm governance cache in the background to reduce UI delay later (P10)
+    asyncio.create_task(pre_warm_governance_cache())
 
     # Deep link: proposal_<id> or proposal_<id>_ref_<referrer_id> (P6-UX.7, P-ECO.3)
     raw = context.args[0] if context.args else ""
