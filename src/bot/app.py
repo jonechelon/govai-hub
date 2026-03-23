@@ -412,29 +412,9 @@ def main() -> None:
     )
 
     try:
-        # ============================================================================
-        # FIXME: TEMPORARY LOCAL POLLING - REVERT BEFORE PRODUCTION DEPLOY
-        # Webhook mode entrypoint is intentionally disabled for local testing.
         # Re-enable asyncio.run(run_bot()) and webhook shutdown log before deploy.
-        # asyncio.run(run_bot())
-        # logger.info("[SHUTDOWN] Webhook server stopped — exiting cleanly")
-        # ============================================================================
-
-        # ============================================================================
-        # FIXME: TEMPORARY LOCAL POLLING - REVERT BEFORE PRODUCTION DEPLOY
-        # Force explicit event loop creation for Python 3.12+ compatibility.
-        # This avoids "There is no current event loop in thread 'MainThread'"
-        # when starting PTB polling mode locally.
-        # ============================================================================
-        application = build_application()
-
-        # Explicitly set the event loop for Python 3.12+ compatibility
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        application.run_polling(drop_pending_updates=True)
-        logger.info("[SHUTDOWN] Polling mode stopped — exiting cleanly")
-        sys.exit(0)
+        asyncio.run(run_bot())
+        logger.info("[SHUTDOWN] Webhook server stopped — exiting cleanly")
 
     except KeyboardInterrupt:
         # Ctrl+C during local development — stop_event handles it via SIGINT handler,
