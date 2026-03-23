@@ -251,7 +251,7 @@ HELP_MESSAGE_TEXT = (
 # Protected copy — do not alter without explicit review in ui_protection.mdc
 GOVERNANCE_HUB_MESSAGE = (
     "<b>🏛️ GovAI Hub — Governance</b>\n\n"
-    "<i>Vote, stake, and track Celo proposals in one place.</i>\n\n"
+    "<i>Vote and track Celo proposals in one place.</i>\n\n"
     "Tap a proposal ID to open details, vote, or create an Auto-Trade."
 )
 

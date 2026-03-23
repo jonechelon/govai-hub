@@ -4,5 +4,8 @@
   "wallet": "0xb8fD989C95Bfb21C8a4F5AF10023EA8411aEB0D5",
   "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
   "timestamp": "2026-03-20T01:12:15.730473+00:00",
-  "celoscanUrl": "https://celoscan.io/tx/0x8623c484f4354f95c2242be52179b8ef11a8b030cdf5019a73ee5e3ddb8d2ae5"
+  "celoscanUrl": "https://celoscan.io/tx/0x8623c484f4354f95c2242be52179b8ef11a8b030cdf5019a73ee5e3ddb8d2ae5",
+  "agentURI": "https://up-to-celo.onrender.com/.well-known/agent-registration.json",
+  "uriUpdatedAt": "2026-03-23T12:59:14.915652+00:00",
+  "uriUpdateTxHash": "0x5170085a723686f844038275e135258d89f1ba25f3e3e672879afb58d4892e02"
 }

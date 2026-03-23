@@ -132,7 +132,7 @@ def build_agent_card(cfg: dict, agent_id: int | str = "") -> dict:
         "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
         "name": erc["agent_name"],
         "description": erc["agent_description"],
-        "endpoints": [
+        "services": [
             {
                 "name": "telegram",
                 "endpoint": erc["agent_endpoint"],

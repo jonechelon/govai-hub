@@ -29,7 +29,7 @@ _STCELO_CELOSCAN = (
     "https://celoscan.io/address/0xC668583dcbDc9ae6FA3CE46462758188adfdfC24"
 )
 
-# Backwards-compatible exports for callbacks.py (gov:stake convert keyboard).
+# Backwards-compatible export for legacy callback imports.
 STCELO_TOKEN_CELOSCAN_URL = _STCELO_CELOSCAN
 
 # StakedCelo Account (pool) — informational only; swaps use TOKEN_ADDRESSES["stCELO"].
@@ -72,7 +72,7 @@ def _ubeswap_url(token_in: str, token_out: str) -> str:
     return _UBESWAP_BASE  # safe fallback
 
 
-# Pre-built CELO → stCELO link for static keyboards (callbacks stake:convert).
+# Pre-built CELO → stCELO link for static keyboards.
 UBESWAP_CELO_TO_STCELO_URL = _ubeswap_url("CELO", "stCELO")
 
 

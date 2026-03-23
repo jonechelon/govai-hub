@@ -6,6 +6,18 @@
 🎥 **[Watch the Video Demo on Google Drive](https://drive.google.com/file/d/1TxhvU1I-BiozT2FPUFvzdHbeVR3dwll9/view?usp=sharing)**
 
 
+## ⛓️ LockedGold Governance Architecture
+GovAI Hub's on-chain governance voting is built on Celo's **LockedGold** contract (upgradeable/proxy-style architecture).
+
+At a high level:
+- The user **locks CELO** and **delegates voting power** to GovAI Hub's governance delegate address via `LockedGold (delegate(address))`.
+- The bot **verifies delegation on-chain** with `/govstatus` by reading the user's current delegate from `LockedGold`.
+- Users submit their vote intent with `/vote <proposal_id> YES|NO|ABSTAIN`.
+- A scheduled executor aggregates intents and then **submits the final vote transaction** on the Celo Governance contract (`vote(proposalId, value)`).
+
+This is self-custodial: the bot never requests private keys or signs user-controlled delegations.
+
+
 ## 💡 The Solution: Bridging the Coordination Gap in Celo
 
 Celo's on-chain governance and DeFi ecosystem offer incredible opportunities, but participating often requires navigating complex interfaces and technical documentation (fricction 70%). **GovAI Hub** bridges this coordination gap by bringing the entire Celo experience directly into Telegram.
@@ -25,7 +37,6 @@ By combining the speed of **Groq-powered LLMs** with the accessibility of a Tele
 *   **🏛️ Governance ELI5 (`/proposal <id>`)**: Get instant AI summaries of complex proposals. No more reading 50-page forum posts—understand the impact and vote YES/NO/ABSTAIN directly.
 *   **💹 AI Trade Suggestions (`/aitrade`)**: Describe your intent (e.g., "I want to swap my CELO for stCELO") and get instant deep links to Ubeswap, Mento, or Jumper.
 *   **🔔 Auto-Trade Alerts**: Attach a trade intent to a proposal. When it passes on-chain, GovAI Hub alerts you with the exact venue links to execute.
-*   **💧 Liquid Staking Integration**: Real-time tracking of stCELO balances and exchange rates to maximize your Celo yield.
 *   **🏦 DAO Treasury Payouts (`/payout`)**: Streamline working group operations with approval-based treasury requests and clean HTML receipts.
 *   **💰 Share & Earn (`/earnings`)**: A built-in referral system that rewards users for growing the Celo governance community.
 *   **🌐 Multi-Network Support**: Seamlessly toggle between **Celo Mainnet**, **Alfajores**, and **Sepolia** for testing and production use.

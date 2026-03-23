@@ -408,10 +408,10 @@ def get_governance_keyboard(
     """Return the keyboard for the Governance Hub and governance sub-screens.
 
     Args:
-        back_callback: Last-row Back target. Use ``menu:main`` on the hub root
-            (user arrived via /start or main menu). Use ``governance_menu`` when
-            this keyboard is shown under History, proposals list, staking, etc.,
-            so Back returns to the Governance hub instead of the main menu.
+        back_callback: Back target on the hub root and governance sub-screens.
+            Use ``menu:main`` on the hub root (user arrived via /start or main
+            menu). Use ``governance_menu`` on sub-screens so Back returns to the
+            Governance hub instead of the main menu.
     """
     return InlineKeyboardMarkup([
         [
@@ -419,11 +419,8 @@ def get_governance_keyboard(
             InlineKeyboardButton("📜 History", callback_data="gov:history"),
         ],
         [
-            InlineKeyboardButton("💧 Liquid Staking", callback_data="gov:stake"),
-            InlineKeyboardButton("📊 My Status", callback_data="gov:status"),
-        ],
-        [
             InlineKeyboardButton("⬅️ Back", callback_data=back_callback),
+            InlineKeyboardButton("📊 My Status", callback_data="gov:status"),
         ],
     ])
 

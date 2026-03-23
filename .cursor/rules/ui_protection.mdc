@@ -30,8 +30,8 @@ Flows that must never regress:
 
 ## Flows being UPGRADED in v2.0 (surgical edit only)
 
-- [🏛️ Governance] keyboard: replace single [⬅️ Back] with 4 buttons:
-  gov:list | gov:history | gov:stake | gov:status
+- [🏛️ Governance] keyboard: use 4 buttons:
+  gov:list | gov:history | menu:main (Back) | gov:status
 - Proposal view: inject vote buttons (vote:YES/NO/ABSTAIN:<id>) + [🤖 Create Auto-Trade if Approved]
 - Wallet flow: regex ^0x[a-fA-F0-9]{40}$ auto-registers wallet, replies "Wallet registered"
 - /payout in groups: multi-sig with SystemState persistence, RBAC via get_chat_member()
@@ -54,7 +54,6 @@ Flows that must never regress:
 
 ## New flows being CREATED in v2.0
 
-- gov:stake callback → stCELO balance + mock conversion
 - auto_trades table → intent capture → conditional execution
 - (Optional, roadmap Fase 11) `src/api/server.py` → `POST /api/v1/treasury/approve/{id}` (x402) — Uvicorn in executor only; never block PTB polling
 
@@ -161,11 +160,10 @@ Rules:
 
 Rule: `url=` **never** on the same row as `callback_data=`. The **[📤 Share on Telegram]** (`url=`) button appears only in the **separate** reply message for `gov:share` — not on the proposal keyboard.
 
-**Approved governance hub keyboard (3 rows):**
+**Approved governance hub keyboard (2 rows):**
 ```
 [🏛 Active Proposals]  [📜 History]
-[💧 Liquid Staking]  [📊 My Status]
-[⬅️ Back]
+[⬅️ Back]  [📊 My Status]
 ```
 
 <!-- ============================================================
@@ -232,7 +230,7 @@ Every DeFi view (swap, stake, auto-trade) must include this exact line:
 Governance hub (`get_governance_keyboard()` default): last-row Back uses `menu:main`
 (same stack as / start main menu). Routed in `callbacks.py`.
 
-Governance **sub-screens** (History, Active Proposals list + vote rows, Liquid Staking,
+Governance **sub-screens** (History, Active Proposals list + vote rows,
 My Status flows, vote errors, etc.): pass `back_callback="governance_menu"` so Back
 returns to the Governance hub — **never** `menu:main` on those screens, or users jump
 out of Governance unintentionally.
@@ -329,12 +327,12 @@ All Back buttons across submenus point to `menu:main`.
 
 **GOVERNANCE_HUB_MESSAGE** (approved, Phase 6-UX.2):
 - Title: `GovAI Hub — Governance`
-- Context line: `Vote, stake, and track Celo proposals in one place.`
+- Context line: `Vote and track Celo proposals in one place.`
 - CTA line: `Tap a proposal ID to open details, vote, or create an Auto-Trade.`
 - parse_mode: `ParseMode.HTML` — static copy only; no `hesc()` required.
 
 **Governance keyboard buttons** (complete set — do not add or remove without a new phase):
-`gov:list` · `gov:history` · `gov:stake` · `gov:status` · `menu:main` (Back)
+`gov:list` · `gov:history` · `gov:status` · `menu:main` (Back)
 
 **govlist line format** (superseded by §15 — see below):
 Format defined in Phase 6-UX.2-Fix. See §15 for the approved two-group layout.

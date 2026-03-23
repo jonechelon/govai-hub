@@ -136,16 +136,20 @@ async def extract_links_from_digest(digest_id: str) -> list[dict]:
         return []
 
 
-def format_daily_sources_html(links: list[dict]) -> str:
-    """Build HTML body for the AI Trade — Daily Sources message (hyperlinked titles)."""
+def format_daily_sources_html(
+    links: list[dict],
+    *,
+    title: str = "💹 <b>AI Trade — Daily Sources</b>",
+) -> str:
+    """Build HTML body for the digest sources message (hyperlinked titles)."""
     if not links:
         return (
-            "💹 <b>AI Trade — Daily Sources</b>\n\n"
+            f"{title}\n\n"
             "<i>No links available for today yet.</i>"
         )
 
     cap = _max_daily_links()
-    header = "💹 <b>AI Trade — Daily Sources</b>"
+    header = title
     blocks: list[str] = []
 
     for idx, item in enumerate(links[:cap], start=1):
