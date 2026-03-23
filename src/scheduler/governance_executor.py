@@ -56,7 +56,8 @@ GOVERNANCE_VOTE_ABI: list[dict[str, Any]] = [
         "constant": False,
         "inputs": [
             {"name": "proposalId", "type": "uint256"},
-            {"name": "value", "type": "uint8"},
+            {"name": "index", "type": "uint256"},
+            {"name": "value", "type": "uint256"},
         ],
         "name": "vote",
         "outputs": [],
@@ -340,8 +341,20 @@ class GovernanceExecutor:
         chain_id = await self._run_sync(lambda: self._w3.eth.chain_id)
         gas_params = await get_dynamic_gas_params(self._w3)
 
+        # 🔍 Find correct index for official Celo Governance
+        try:
+            dequeued = await self._run_sync(self._governance_read.functions.getDequeue().call)
+            index = 0
+            for i, pid in enumerate(dequeued or []):
+                if int(pid) == int(proposal_id):
+                    index = i
+                    break
+        except Exception:
+            index = 0
+
         tx_dict = self._contract.functions.vote(
             proposal_id,
+            index,
             vote_value,
         ).build_transaction(
             {

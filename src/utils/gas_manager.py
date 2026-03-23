@@ -91,7 +91,8 @@ def simulate_vote_transaction(
         raise ValueError("Web3 provider is not connected.")
 
     try:
-        tx_params = contract.functions.vote(proposal_id, vote_value).build_transaction(
+        # Default index to 0 for simulation purposes
+        tx_params = contract.functions.vote(proposal_id, 0, vote_value).build_transaction(
             {
                 "from": bot_wallet_address,
             }
