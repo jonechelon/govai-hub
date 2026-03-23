@@ -255,7 +255,7 @@ def send_tx(w3: Web3, contract_fn, wallet_checksum: str, private_key: str) -> di
         }
     )
     signed_tx = w3.eth.account.sign_transaction(tx, private_key=private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
     tx_hash_hex = tx_hash.hex()
     logger.info("ERC8004: Tx broadcast — %s", tx_hash_hex)
 
