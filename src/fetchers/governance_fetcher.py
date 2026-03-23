@@ -13,6 +13,10 @@ from src.utils.cache_manager import cache
 
 logger = logging.getLogger(__name__)
 
+# Global lock to ensure only one pre-warm runs at a time
+_pre_warm_lock = asyncio.Lock()
+# Semaphore to limit parallel RPC calls to avoid provider saturation
+_rpc_semaphore = asyncio.Semaphore(3)
 
 # ⚠️ Confirm this address at https://celoscan.io before production use
 GOVERNANCE_ADDRESS = Web3.to_checksum_address(
@@ -323,9 +327,10 @@ async def get_active_proposals_onchain(w3: Web3, contract_address: str) -> dict[
             return int(pid), None
 
     async def _fetch_status(pid: int) -> tuple[int, str | None]:
-        pid_res, stage_res = await asyncio.to_thread(
-            _get_stage_sync, w3, contract_address, pid
-        )
+        async with _rpc_semaphore:
+            pid_res, stage_res = await asyncio.to_thread(
+                _get_stage_sync, w3, contract_address, pid
+            )
         return pid_res, _classify_proposal_status(stage_res)
 
     try:
@@ -614,18 +619,23 @@ async def pre_warm_governance_cache() -> None:
     during /start or when returning to the main menu to eliminate 
     the UI delay when the user eventually clicks 'Governance'.
     """
-    try:
-        # Check if cache is already fresh (< 5 minutes) to avoid redundant RPC calls
-        age = cache.get_age_minutes("gov_active")
-        if age is not None and age < 5.0:
-            logger.debug("[GOVERNANCE] Cache is still fresh (%.1f min) - skipping pre-warm", age)
-            return
+    if _pre_warm_lock.locked():
+        logger.debug("[GOVERNANCE] Pre-warm already in progress, skipping...")
+        return
 
-        logger.info("[GOVERNANCE] Pre-warming active proposals cache...")
-        rpc_url = get_env_or_fail("CELO_RPC_URL")
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
-        # This will trigger the fetch and save to cache via get_active_proposals_onchain
-        await get_active_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
-        logger.info("[GOVERNANCE] Cache pre-warmed successfully")
-    except Exception as exc:
-        logger.warning("[GOVERNANCE] Pre-warm failed: %s", exc)
+    async with _pre_warm_lock:
+        try:
+            # Check if cache is already fresh (< 15 minutes) to avoid redundant RPC calls
+            age = cache.get_age_minutes("gov_active")
+            if age is not None and age < 15.0:
+                logger.debug("[GOVERNANCE] Cache is still fresh (%.1f min) - skipping pre-warm", age)
+                return
+
+            logger.info("[GOVERNANCE] Pre-warming active proposals cache...")
+            rpc_url = get_env_or_fail("CELO_RPC_URL")
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+            # This will trigger the fetch and save to cache via get_active_proposals_onchain
+            await get_active_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
+            logger.info("[GOVERNANCE] Cache pre-warmed successfully")
+        except Exception as exc:
+            logger.warning("[GOVERNANCE] Pre-warm failed: %s", exc)
