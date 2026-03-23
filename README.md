@@ -1,7 +1,7 @@
 # GovAI Hub - Financial & Political AI Agent
 
 > **Financial & Political AI Agent for Celo Governance, DeFi, and Treasury Coordination.**  
-> *Network-agnostic AI for the Celo ecosystem. 🟡Celo Mainnet/🍪Alfajores/🧪Sepolia*
+> *Network-agnostic AI for the Celo ecosystem. 🟡 Celo Mainnet/🍪 Alfajores/🧪 Sepolia*
 
 🎥 **[Watch the Video Demo on Google Drive](https://drive.google.com/file/d/1TxhvU1I-BiozT2FPUFvzdHbeVR3dwll9/view?usp=sharing)**
 
