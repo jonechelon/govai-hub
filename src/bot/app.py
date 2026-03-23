@@ -267,6 +267,43 @@ async def run_bot() -> None:
     # Start the update-processing background task (consumes from update_queue).
     await application.start()
 
+    async def handle_agent_registration(request: web.Request) -> web.Response:
+        import json as _json
+        from pathlib import Path
+
+        reg_file = Path("data/agentregistration.json")
+        agent_id = 2807
+        if reg_file.exists():
+            try:
+                agent_id = _json.loads(reg_file.read_text()).get("agentId", 2807)
+            except Exception:
+                pass
+        card = {
+            "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+            "name": "GovAI Hub",
+            "description": "Network-agnostic AI for Celo governance, DeFi & treasury.",
+            "services": [
+                {
+                    "name": "telegram",
+                    "endpoint": "https://t.me/GovAIHub_bot",
+                    "version": "1.0.0",
+                    "capabilities": {},
+                }
+            ],
+            "x402Support": False,
+            "active": True,
+            "registrations": [
+                {
+                    "agentId": agent_id,
+                    "agentRegistry": "eip155:42220:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+                }
+            ],
+        }
+        return web.Response(
+            text=_json.dumps(card, indent=2),
+            content_type="application/json",
+        )
+
     # ------------------------------------------------------------------
     # Build our own aiohttp server — we own every route on this server.
     # ------------------------------------------------------------------
@@ -292,6 +329,8 @@ async def run_bot() -> None:
     aio_app.router.add_post(webhook_path, telegram_update_handler)
     aio_app.router.add_get("/health", _health_handler)
     aio_app.router.add_get("/", root_handler)
+    aio_app.router.add_get("/.well-known/agent-registration.json", handle_agent_registration)
+    aio_app.router.add_get("/.well-known/agent-registration", handle_agent_registration)
 
     # Register the webhook URL with Telegram (idempotent — safe on every restart).
     if webhook_url:
