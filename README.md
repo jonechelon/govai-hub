@@ -3,7 +3,7 @@
 > **Financial & Political AI Agent for Celo Governance, DeFi, and Treasury Coordination.**  
 > *Network-agnostic AI for the Celo ecosystem.*
 
-🎥 **[DROP VIDEO FILE HERE]**
+🎥 **[Watch the Video Demo on Google Drive](https://drive.google.com/file/d/1TxhvU1I-BiozT2FPUFvzdHbeVR3dwll9/view?usp=sharing)**
 
 
 ## 💡 The Solution: Bridging the Coordination Gap in Celo
