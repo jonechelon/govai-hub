@@ -9,7 +9,9 @@
 
 ---
 
-🎥 **[Watch the Video Demo on Google Drive](https://drive.google.com/file/d/1TxhvU1I-BiozT2FPUFvzdHbeVR3dwll9/view?usp=sharing)**
+### 🎥 [**Watch the Video Demo on Google Drive**](https://drive.google.com/file/d/1TxhvU1I-BiozT2FPUFvzdHbeVR3dwll9/view?usp=sharing)
+
+---
 
 
 ## ⛓️ LockedGold Governance Architecture
