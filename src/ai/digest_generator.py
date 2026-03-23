@@ -10,6 +10,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from src.ai.digest_builder import DigestBuilder
+from src.ai.digest_titles import shorten_long_titles_in_sections
 from src.ai.groq_client import groq_client
 from src.ai.prompt_builder import prompt_builder
 from src.fetchers.fetcher_manager import fetcher_manager
@@ -65,12 +66,14 @@ class DigestGenerator:
             context, context_sections = self._builder.build_context(
                 snapshot, user_apps_by_category
             )
+            context_sections = await shorten_long_titles_in_sections(context_sections)
 
             if not context or len(context.strip()) < 100:
                 logger.warning("[DIGEST] Context too small — generating market-only digest")
                 context, context_sections = self._builder.build_context(
                     snapshot, user_apps_by_category=None
                 )
+                context_sections = await shorten_long_titles_in_sections(context_sections)
 
             logger.info("[DIGEST] Step 3/4 — building prompt")
             messages = prompt_builder.build_digest_prompt(context)

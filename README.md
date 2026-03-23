@@ -1,190 +1,185 @@
-# 🍪 Celo GovAI Hub 🟡
+# GovAI Hub — Financial & Political AI Agent
 
-**Be up to date on Celo Decentralized Governance.**
+> Network-agnostic AI agent for Celo governance, DeFi, and DAO treasury coordination.  
+> Built for the **[Build Agents for the Real World — Celo V2 Hackathon](https://celo.org)**.
 
-> 🍪 **Welcome to Celo GovAI Hub!** 🟡
-> Your mobile-first, network-agnostic AI terminal for the Celo Ecosystem. Bridging the gap between On-chain Insights, Decentralized Governance, and Daily Digests-all secured by Celo's native LockedGold architecture and delivered straight to your Telegram.
-
-## What is Celo GovAI Hub?
-
-**Celo GovAI Hub** is a mobile-first AI terminal designed for the Celo ecosystem. It delivers daily on-chain insights and allows you to participate in network governance with a single command (e.g., `/vote 47 YES/NO`—all while keeping your funds strictly non-custodial and secure through Celo's native `LockedGold` architecture.
-
-> 💡 **The UX Problem We Solve:**  
-> The traditional Web3 governance funnel is broken. Over 70% of users drop off between discovering a proposal, opening a dApp, connecting a wallet, and finally signing an on-chain transaction. 
->
-> **With Celo GovAI Hub**, once `LockedGold` delegation is in place, governance becomes a frictionless, mobile-native interaction. You vote directly from Telegram using a single, fast command: `/vote <id> YES|NO|ABSTAIN` (e.g., `/vote 47 YES`).
-
-**Try it:** [@CeloGovAI_bot](https://t.me/CeloGovAI_bot)
+[![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org)
+[![PTB](https://img.shields.io/badge/python--telegram--bot-v21-blue)](https://python-telegram-bot.org)
+[![Deploy](https://img.shields.io/badge/deploy-Render-informational)](https://render.com)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
 
-### ⏱️ TL;DR for Technical Judges
+## What is GovAI Hub?
 
-Are you evaluating the technical depth of this project? Skip the standard bot features and dive directly into our architecture. Explore our `/docs` folder to see our Web3 integration, proxy resolution, crypto-native economy, and security implementations:
+GovAI Hub is a Telegram bot that connects Celo token holders to on-chain governance,
+DeFi venues, and DAO treasury operations.
 
-- 🛡️ **[Security & Architecture](docs/architecture.md):** How we implemented Separation of Concerns (Treasury vs. Governance Delegate) and structured our PostgreSQL/Render environment.
-- ⛓️ **[On-Chain Truth & LockedGold](docs/governance_flow.md):** The bot doesn't trust third-party APIs. It reads Celo's `LockedGold` proxies directly via `Web3.py` to verify delegation before allowing votes.
-- 🤖 **[Advanced Prompt Engineering](docs/ai_prompts.md):** How we tamed the Groq LLM to parse dense technical proposals into modular, mobile-friendly formats (ELI5, Details, Impact).
-- 🌐 **[Data Aggregation Engine](docs/data_aggregation_engine.md):** Acting as an off-chain oracle, pulling from Celo Forums (RSS), sentiment, and on-chain metrics.
-- 💳 **[Crypto Payment Gateway](docs/crypto_payment_gateway.md):** A fully decentralized premium subscription model verifying cUSD transfers autonomously.
-- ⚙️ **[Async Background Workers](docs/async_background_workers.md):** Proactive task scheduling (Daily Digests, Vote Alerts) running silently without blocking the main Webhook server.
-- 🗄️ **[Relational State Management](docs/database_schema.md):** Robust user preferences, network toggles (Mainnet/Alfajores), and wallet states handled via Neon/Postgres.
+DeFi actions are always wallet-signed via deep links (Ubeswap, Mento, Valora).  
+For governance execution, the bot uses a dedicated delegate wallet configured on the server.
 
----
+**Who is it for?**
 
-## 📸 Interface & Demo
-
-*(Images and GIFs coming soon...)*
+- **Celo token holders** who want to follow, vote on, and act on governance proposals
+  directly from Telegram
+- **DeFi users** who want AI-guided trade shortcuts to Ubeswap, Mento, and stCELO
+- **DAOs and working groups** that need lightweight treasury payout coordination
+  with on-chain receipts and multi-admin quorum approval
 
 ---
 
+## Core Features
+
+### 🗳️ Governance
+Browse active Celo proposals, vote YES / NO / ABSTAIN, view vote history,
+and read AI-generated summaries powered by Groq (`llama-3.3-70b-versatile`).
+
+### 🤖 AI Trade (`/aitrade`)
+Send a natural-language intent (for example, `swap 10 CELO to stCELO`) and receive
+deep links to Ubeswap, Mento, and additional Celo venues. DeFi execution is always
+signed in the user's wallet.
+
+### 📋 Auto-Trade Alerts
+Attach a trade intent to a governance proposal. When the proposal executes
+on-chain, the bot sends venue links. For Ubeswap links, `feeTo=<TREASURY_ADDRESS>`
+is appended when treasury is configured.
+
+### 💧 Liquid Staking
+Live stCELO wallet balance and stCELO→CELO rate from Celo mainnet contracts:
+- stCELO token (ERC-20): `0xC668583dcbDc9ae6FA3CE46462758188adfdfC24`
+- StakedCelo manager (`toCelo`): `0x0239b96D10a434a56CC9E09383077A0490cF9398`
+- StakedCelo account (reference): `0x4aAD04D41FD7fd495503731C5a2579e19054C432`
+
+### 🏛️ DAO Treasury Payouts (`/payout` — groups)
+Create a payout request in groups; N-of-admin approval with an HTML receipt.
+Quorum is configurable via `TREASURY_QUORUM`. The bot does not execute treasury transfers.
+
+### 🔗 Share & Earn (`/earnings`)
+Share a proposal referral link. Referral activity is tracked in DB (`swap_count`,
+`earned_usdm`, `gov_points`) and shown in the earnings dashboard.
+
+### 🌐 Multi-network
+Per-user network toggle across Celo Mainnet, Alfajores, and Sepolia.
+RPC resolver falls back to mainnet RPC when network-specific env vars are unset.
+
 ---
 
-## Agent Loop
+## Stack
 
-```text
-[ Data Sources ]
-├─ Celo RPC (Blocks, Governance state, TVL)
-├─ CoinGecko / DeFi Llama (Market data)
-├─ RSS Feeds (15+ ecosystem sources)
-└─ Twitter/X (10+ ecosystem accounts)
-         │
-         ▼
-[ AI Processing ]
-└─ Groq API (llama-3.3-70b-versatile)
-         │
-         ▼
-[ Execution & Output ]
-├─ Telegram UI (Daily digests, /ask, Gov Hub)
-├─ PostgreSQL (State & Delegation tracking)
-└─ Celo Mainnet (On-chain voting via LockedGold)
-```
+| Layer | Technology |
+|---|---|
+| Bot runtime | Python 3.12 · `python-telegram-bot[webhooks]` v21 |
+| AI / NLP | Groq API (`llama-3.3-70b-versatile` + fallbacks) |
+| On-chain reads | `web3.py` on Celo RPC (Forno default fallback) |
+| Scheduler | APScheduler 3.10 (daily digest, payment poller, governance jobs) |
+| Database | SQLAlchemy 2.0 async + `asyncpg` (Neon PostgreSQL) / `aiosqlite` (local) |
+| Prices | CoinGecko API (optional key) |
+| Tx history | Blockscout Celo REST v2 + Etherscan V2 (`chainid=42220`) |
+| Deploy | Render.com |
 
-## Key Features
+---
 
-- 🏛️ **Governance Hub** — Real-time Celo governance integration. Includes `/govlist` for active proposals, `/govhistory` for past decisions, AI-powered ELI5 summaries (`/proposal`), and 1-click on-chain voting (`/vote`).
-- 🤖 **Conversational Agent** — Use `/ask` to chat with an AI that knows the Celo ecosystem inside out.
-- 📰 **Daily AI Digest** — Personalized daily news, DeFi/ReFi updates, and on-chain data.
-- ⭐ **Premium Plan (cUSD)** — Access advanced features with frictionless stablecoin payments on Celo Mainnet.
-- ⚙️ **Personalization** — Choose exactly which apps and categories you want to follow.
-- 🔗 **ERC-8004** — Registered as an on-chain agent.
-- 🩺 **Self-Monitoring** — Built-in health checker with admin Telegram alerts.
+## Commands
 
-## Mobile-First Governance
+| Command | Description |
+|---|---|
+| `/start` | Welcome, user registration, optional referral binding |
+| `/help` | Full command reference |
+| `/aitrade <intent>` | AI-guided DeFi deep links via Groq |
+| `/earnings` | Referral rewards and GovPoints dashboard |
+| `/payout @user <amount> [TOKEN]` | DAO treasury payout request (groups) |
+| `/governance` | Governance hub |
+| `/vote <proposal_id> <yes\|no\|abstain>` | Record governance vote intent |
+| `/proposal <id>` | Proposal details with AI summary |
+| `/settings` | Alerts, network, wallet and app preferences |
 
-Celo GovAI Hub eliminates that friction with a mobile-first governance flow built on Celo's `LockedGold`contract using the "Proxy via Delegation" model.
+Admin-only: `/admin_stats`, `/admin_broadcast`, `/admin_digest_now`
 
-In this model, users keep their CELO in their own self-custodial wallet and make a single,one-time delegation to enable voting power via `LockedGold`. Once delegation is in place, the Gov Hub uses that delegated voting power to execute votes on-chain on the user's behalf.
+---
 
-After the one-time setup, participation becomes simple and Telegram-native: users vote with a single command (e.g., `/vote 123 YES|NO|ABSTAIN`) without repeatedly signing new on-chain transactions for every proposal.
-
-The outcome is governance that feels like chatting with an assistant, while preserving the security assumptions and delegation guarantees of the underlying Celo network.
-
-To completely align with real-world economics, the Hub's premium features are monetized exclusively through **cUSD** (Celo Dollar). By charging in a stablecoin rather than a volatile asset, the agent offers predictable pricing for users and supports the "Real World Agents" narrative, proving that automated governance and AI digests can be seamlessly powered by everyday digital currency.
-
-## Security Architecture
-
-The Celo GovAI Hub security model follows industry standards for non-custodial agents operating on
-public blockchains. The bot is built around three core pillars:
-
-- **Self-Custody (Zero Private Keys)**: The backend never requests, stores, or has direct access
-to users' private keys. All sensitive signing operations happen in the user's own wallet. The
-agent only works with public addresses and on-chain state, plus off-chain preferences stored in
-a database.
-- **Transaction Simulation (Dry-Run)**: Before submitting any transaction on-chain, the bot uses
-`eth_call` to simulate the execution against the Celo JSON-RPC endpoint. This dry-run flow
-checks for potential reverts, missing approvals, or misconfigured parameters, reducing the risk
-of failed transactions and unnecessary gas spending.
-- **Gas Price Ceilings**: The agent enforces a hard cap on acceptable gas prices. If network
-conditions push gas costs above this ceiling, execution is paused for non-critical actions and an
-operator warning is surfaced. This protects the bot's balance and prevents unnecessary spending
-during severe congestion.
-
-## Tech Stack
-
-
-| Layer      | Technology                           |
-| ---------- | ------------------------------------ |
-| Language   | Python 3.12                          |
-| Bot        | python-telegram-bot v21+             |
-| AI         | Groq `llama-3.3-70b-versatile`       |
-| Blockchain | web3.py · Celo Mainnet RPC           |
-| Database   | PostgreSQL (Neon) · SQLAlchemy async |
-| Scheduler  | APScheduler                          |
-| Deploy     | Render.com                           |
-
-
-## Monitored Ecosystem
-
-
-| Category | Apps                                             |
-| -------- | ------------------------------------------------ |
-| Payments | MiniPay, Valora, HaloFi, Hurupay                 |
-| DeFi     | Ubeswap, Mento, Moola, Symmetric, Uniswap (Celo) |
-| ReFi     | Toucan, ImpactMarket                             |
-| NFTs     | OctoPlace, Hypermove, TrueFeedBack               |
-| Network  | Celo Network, Celo Reserve                       |
-
-
-## Completed Features
-
-- ✅ Daily AI digest engine
-- ✅ Conversational AI agent (`/ask`)
-- ✅ Personalized settings per user
-- ✅ Premium payments on Mainnet (fully migrated from native CELO to cUSD)
-- ✅ cUSD-only payment detection and on-chain `/confirmpayment` verification via ERC-20 `Transfer` events
-- ✅ Refactored `payment_fetcher.py` cUSD payment detection to rely on `Transfer` events to `BOT_WALLET_ADDRESS` only 
-- ✅ Telegram payment UI fully migrated to cUSD plans (Phase 13)
-- ✅ Updated `/premium` and `/setwallet` handlers to reflect cUSD plan pricing (Phase 13 · P46)
-- ✅ Health monitoring + UptimeRobot
-- ✅ ERC-8004 on-chain agent registration
-- ✅ Governance proposal push alerts (15min polling + `/governance`)
-- ✅ Mobile-first governance via `LockedGold` delegation + Telegram voting (`/vote 123 YES`)
-- ✅ README value proposition refresh for hackathon judges (Mobile-first governance, cUSD, security) (Phase 12)
-- ✅ LockedGold delegation tracking: `user_wallet`, `delegated_power`, `revoked_at`)
-- ✅ Delegation Command (`/delegate` and `/revoke`) with LockedGold self-custodial instructions (Phase 14 · P48)
-- ✅ On-chain delegation status validator via LockedGold (`/govstatus`) with `delegated_power` + `revoked_at` tracking 
-- ✅ Governance vote intent queue and `/vote` command 
-- ✅ Gas price ceiling safety module for governance transactions 
-- ✅ Governance transaction simulation (dry-run via `eth_call`) for votes
-- ✅ Scheduled governance vote executor with majority aggregation and on-chain execution (runs every 30 minutes)
-- ✅ Governance proposal description text extractor with `timeout=5` and 8000-character hard limit 
-- ✅ P54 (extractor) + P55 (`/proposal <id>` Groq ELI5 summaries + AI Summary in governance push alerts)
-- ✅ UX fix: `/proposal <id>` now falls back on-chain (via `getProposal()`) only when the proposal is missing from local DB, with a clearer "not found" response
-- ✅ `/govlist` native on-chain proposal listing via `getQueue()` and `getDequeue()` with `queued` + `dequeued` buckets · 
-- ✅ Native on-chain governance history listing (`/govhistory`) with stage-based filtering and safe Telegram limits 
-- ✅ Advanced on-chain filtering for `/govlist` (remove zeros/duplicates, resolve true stage per ID, cap inactive buckets) 
-
-## Roadmap
-
-- 🔜 Buy CELO directly from the bot
-- 🔜 Celo GovAI Hub for Discord
-- 🔜 AI-generated price charts in `/ask`
-- 🔜 Celo wallet portfolio tracker
-- 🔜 Multi-language support (PT · ES · FR · ZH)
-- 🔜 Agent-to-agent (A2A) communication
-- 🔜 Webhook-based real-time event triggers
-
-## Quick Start
+## Quick Start (local)
 
 ```bash
-git clone https://github.com/jonechelon/CeloGovAIHub.git
-cd CeloGovAIHub
-cp .env.example .env   # fill in keys — see .env.example
+git clone https://github.com/<!-- TODO: preencher -->/govai-hub.git
+cd govai-hub
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env   # fill required variables
 python -m src.bot.app
 ```
 
-Test governance alerts:
+---
 
-```bash
-python scripts/test_governance.py
+## Project Structure
+
+```text
+src/
+├── ai/            # Groq client, prompt builder, digest generator
+├── bot/           # handlers, callbacks, keyboards, app entry point
+├── database/      # SQLAlchemy models, async manager, startup migrations
+├── fetchers/      # governance, on-chain, market, RSS, CoinGecko
+├── scheduler/     # APScheduler jobs: digest, governance, payment poller, AI reminders
+└── utils/         # defi_links, text_utils, blockscout, etherscan_v2, token registry
 ```
 
-Use `/governance` inside Telegram to see live proposals.
+---
 
-## License
+## Database Schema (key tables)
 
-MIT — open source, free to fork and build upon.
+| Table | Purpose |
+|---|---|
+| `users` | Telegram user profile, wallet/network prefs, tier, `gov_points`, `referred_by` |
+| `auto_trades` | Trade intent tied to proposal execution notifications |
+| `ai_trade_sessions` | `/aitrade` suggestion sessions (`session_id`, `suggestions_json`) |
+| `payout_requests` | DAO treasury requests with approvals JSON and status |
+| `referrals` | Referrer→referee mapping with `swap_count` and `earned_usdm` |
+| `governance_alerts` | Proposal broadcast deduplication and send status |
+| `governance_votes` | User vote intents and optional executed tx hash |
+| `system_state` | Persistent key-value state (stateless deploy safe) |
 
-Built for the Celo Build Agents for the Real World Hackathon V2 · March 2026
+---
+
+## Supported Tokens (Celo Mainnet)
+
+| Token | Contract |
+|---|---|
+| CELO | `0x471EcE3750Da237f93B8E339c536989b8978a438` |
+| stCELO | `0xC668583dcbDc9ae6FA3CE46462758188adfdfC24` |
+| USDm | `0x765DE816845861e75a25fca122bb6898B8B1282a` |
+| USDC | `0xceba9300f2b948710d2653dD7B07f33A8B32118C` |
+| cEUR | `0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73` |
+
+---
+
+## Documentation
+
+| Doc | Description |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | System overview and component diagram |
+| [`docs/governance_flow.md`](docs/governance_flow.md) | End-to-end governance and vote flow |
+| [`docs/ai-trade-handoff.md`](docs/ai-trade-handoff.md) | AI Trade prompt and handoff spec |
+| [`docs/database_schema.md`](docs/database_schema.md) | Full DB schema and migrations |
+| [`docs/async_background_workers.md`](docs/async_background_workers.md) | Scheduler jobs and APScheduler setup |
+| [`docs/data_aggregation_engine.md`](docs/data_aggregation_engine.md) | Fetcher pipeline (RSS, market, governance, on-chain) |
+| [`docs/crypto_payment_gateway.md`](docs/crypto_payment_gateway.md) | cUSD payment flow and payment poller |
+| [`docs/ai_prompts.md`](docs/ai_prompts.md) | Prompt library reference |
+
+---
+
+## Hackathon Submission
+
+🏆 Hackathon: Build Agents for the Real World — Celo V2  
+📅 Deadline: 22 March 2026
+
+- Karma: <!-- TODO: preencher -->
+- Agentscan: <!-- TODO: preencher -->
+- Announcement tweet: <!-- TODO: preencher -->
+
+---
+
+## Security & Custody
+
+- The bot never holds user funds for DeFi operations.
+- DeFi actions are deep links only; users sign in their own wallet.
+- DAO treasury payouts are approval workflows; transfer execution is manual.
+- `BOT_WALLET_PRIVATE_KEY` and `GOVERNANCE_PRIVATE_KEY` are sensitive and must never be committed.

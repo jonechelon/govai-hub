@@ -16,6 +16,9 @@ Flows that must never regress:
 - `/start`, `/ask`, `/govlist`, `/confirmpayment`, `/setwallet`
 - `menu:main`, `payout:approve:<id>`
 - `/confirmpayment` must remain active even after a future PaymentPoller is added.
+- **AI Trade (digest):** `digest:latest` (Daily Sources) → `digest:link:{digest_id}:{index}` (article AI Trade result: Groq lines, **DEX** `url=` keyboard, optional **fiat on-ramp** `url=` row when stables appear, **Back**); **`/aitrade`** + `ai_pick:` session picks (TTL 24h). Do not remove or rename without updating `docs/ai-trade-handoff.md` and this §20.
+- **On-chain activity hub:** `menu:onchain_hub` → `ONCHAIN_HUB_MESSAGE` + `[📋 All activity][🏛️ Governance][💹 AI Trade]` + `[⬅️ Back]` (`menu:main`). **`onchain:txlist:all`** (unfiltered), **`onchain:txlist:governance`** (Governance contract `to`), **`onchain:txlist:aitrade`** (known DeFi token contracts) — **must not** route to `governance:open` or `digest:latest`. Back from the tx list → `menu:onchain_hub`.
+- **`gov:share:<pid>`** — reply with a **new** message (personalized `t.me/...?start=proposal_<pid>_ref_<user_id>` link, referral stats, optional wallet warning). **Never** edit the original proposal card message.
 
 ## Existing flows that MUST NOT be broken
 
@@ -53,7 +56,7 @@ Flows that must never regress:
 
 - gov:stake callback → stCELO balance + mock conversion
 - auto_trades table → intent capture → conditional execution
-- src/a2a/server.py → POST /api/v1/intent → Telegram push
+- (Optional, roadmap Fase 11) `src/api/server.py` → `POST /api/v1/treasury/approve/{id}` (x402) — Uvicorn in executor only; never block PTB polling
 
 <!-- ============================================================
      §10 — Anti-Regression Rules
@@ -145,13 +148,18 @@ Rules:
 - Destructive actions must be on a **separate row**.
 - `url=` buttons must **never** share a row with `callback_data=` buttons.
 
-**Approved proposal keyboard (4 rows):**
+### Approved layout — Individual proposal (6 rows) — P-ECO.4
+
 ```
 [✅ YES]  [❌ NO]  [🤷 ABSTAIN]
-[📋 Create Auto-Trade]
-[🤖 Swap→stCELO]  [🤖 Swap→USDm]  [🤖 Stake]
-[⬅️ Back]
+[🤖 Create Auto-Trade if Approved]
+[🎒Staking or 🔄Swap?]               ← section label (noop alert)
+[🔄stCELO]  [🔄USDm]  [🎒stCELO]
+[🔗 Share & Earn]                    ← callback_data gov:share:<pid> — P-ECO.4
+[⬅️ Back]                            ← callback_data gov:list
 ```
+
+Rule: `url=` **never** on the same row as `callback_data=`. The **[📤 Share on Telegram]** (`url=`) button appears only in the **separate** reply message for `gov:share` — not on the proposal keyboard.
 
 **Approved governance hub keyboard (3 rows):**
 ```
@@ -165,7 +173,7 @@ Rules:
      ============================================================ -->
 ## §5 — Mandatory Empty States
 
-Copy canônico — nunca alterar sem nova fase:
+Canonical copy — never alter without a new phase:
 
 ```
 # /govlist empty
@@ -221,5 +229,343 @@ Every DeFi view (swap, stake, auto-trade) must include this exact line:
 
 **Forbidden** in: `get_main_keyboard`
 
-Callback value: `menu:main` — verify this route exists in the callback router
-before any Phase 6 UX step.
+Governance hub (`get_governance_keyboard()` default): last-row Back uses `menu:main`
+(same stack as / start main menu). Routed in `callbacks.py`.
+
+Governance **sub-screens** (History, Active Proposals list + vote rows, Liquid Staking,
+My Status flows, vote errors, etc.): pass `back_callback="governance_menu"` so Back
+returns to the Governance hub — **never** `menu:main` on those screens, or users jump
+out of Governance unintentionally.
+
+**Status (Phase 6-UX.5):** verified and enforced.
+- `menu:main` and `governance_menu` callbacks confirmed routed in `callbacks.py`.
+- Back present in: `get_digest_keyboard` · `get_governance_keyboard` · `get_premium_keyboard` · `get_settings_keyboard`
+- Back absent in: `get_main_keyboard` ✅
+- `menu:digest` callback unchanged ✅
+
+<!-- ============================================================
+     §11 — Canonical Formatting Helpers
+     ============================================================ -->
+## §11 — Canonical Formatting Helpers
+
+`hesc()`, `truncate()`, `truncate_wallet()`, and `proposal_header()` in
+`src/utils/text_utils.py` are the **sole canonical helpers** for HTML
+formatting in this project.
+
+Rules:
+- Never duplicate `html.escape()` logic inline in handlers or callbacks.
+- Never write manual `text[:N]` truncations in message strings.
+- Never display a raw wallet address — always use `truncate_wallet()`.
+- `proposal_header()` is the only approved way to render a proposal title block.
+- Future phases may add helpers to `text_utils.py` but must not redefine these four.
+
+<!-- ============================================================
+     §12 — Celo Sepolia Network (Fase 8)
+     ============================================================ -->
+## §12 — Celo Sepolia Network
+
+- Column `network` in `users` table accepts only `'mainnet'`, `'alfajores'`,
+  `'sepolia'` — never add new values without an explicit `_MIGRATIONS` entry.
+- `get_w3(network)` in `src/fetchers/onchain_fetcher.py` is the **sole entry
+  point** for Web3 instances — never instantiate `Web3` directly with a
+  hardcoded URL anywhere else in the codebase.
+- Missing RPC URL for the requested network → fall back to mainnet and emit
+  a `[WARN]` log — never raise an unhandled exception due to a missing env var.
+- Main keyboard network toggles (Mainnet, Alfajores, Sepolia) are governed here;
+  protected welcome copy is documented in §13.
+- The 🔵 Sepolia toggle was introduced in Phase 6 (P6-UX.1) — do not recreate
+  or duplicate this UI element in future phases.
+
+<!-- ============================================================
+     §13 — Protected Copy: Welcome & Help
+     ============================================================ -->
+## §13 — Protected Copy: Welcome & Help
+
+`WELCOME_MESSAGE` and `HELP_MESSAGE_TEXT` in `src/bot/handlers.py` are
+**protected copy**. Do not alter their content without explicit review
+documented in a new numbered section of this file.
+
+Approved `WELCOME_MESSAGE` structure:
+- Line 1: `<b>🤖 GovAI Hub — Financial &amp; Political AI Agent</b>`
+- Line 2: `<i>Network-agnostic AI for Celo governance, DeFi &amp; treasury.</i>`
+- Bullet list: vote, staking, auto-trade, treasury
+- Closing: wallet registration instruction
+
+Approved `HELP_MESSAGE_TEXT` structure:
+- Title: `<b>🤖 GovAI Hub — Command Center</b>`
+- Sections: AI &amp; Insights; Governance &amp; Voting; Wallet &amp; Premium;
+  Treasury (groups); Networks + Settings hint; General (`/start`, `/help`)
+- Closing: `<i>Use the menu buttons for the full experience.</i>`
+
+`menu:main` callback was verified and routed in Phase 6-UX.1.
+All Back buttons across submenus point to `menu:main`.
+
+### Deep link `/start` with proposal parameter (Phase 6-UX.7)
+
+**Approved format:** `https://t.me/GovAIHub_bot?start=proposal_<id>`
+
+**Behavior:**
+- `context.args[0]` starts with `proposal_` → parse integer `id` → call
+  `deliver_proposal_summary_from_anchor(message, id, edit_same_message=False, silent_failure=True)`.
+- Invalid `proposal_id` (non-integer) → fall through to `WELCOME_MESSAGE` with no error.
+- Proposal not found, RPC failure, extract/summary failure → silent path in
+  `deliver_proposal_summary_from_anchor` (no user-visible error) → fall through to
+  `WELCOME_MESSAGE`.
+- `/start` with no payload → `WELCOME_MESSAGE` (unchanged).
+
+**Intended use:**
+- Auto-Trade notification buttons (Phase 4, P9) deep-linking to a proposal.
+- External sharing of a proposal via Telegram link.
+
+**Rules:**
+- `edit_same_message=False` on `/start` — always a new message, never edit the start message.
+- Do not surface errors on deep-link failure; fall back to the normal welcome flow.
+- Parameter uses underscore: `proposal_42`, not `proposal-42` or `proposal:42`.
+
+<!-- ============================================================
+     §14 — Protected Copy: Governance Hub & Lists (P6-UX.2)
+     ============================================================ -->
+## §14 — Protected Copy: Governance Hub & Lists
+
+**GOVERNANCE_HUB_MESSAGE** (approved, Phase 6-UX.2):
+- Title: `GovAI Hub — Governance`
+- Context line: `Vote, stake, and track Celo proposals in one place.`
+- CTA line: `Tap a proposal ID to open details, vote, or create an Auto-Trade.`
+- parse_mode: `ParseMode.HTML` — static copy only; no `hesc()` required.
+
+**Governance keyboard buttons** (complete set — do not add or remove without a new phase):
+`gov:list` · `gov:history` · `gov:stake` · `gov:status` · `menu:main` (Back)
+
+**govlist line format** (superseded by §15 — see below):
+Format defined in Phase 6-UX.2-Fix. See §15 for the approved two-group layout.
+
+**govhistory line format** (approved):
+`#{id} — {hesc(truncate(title, 120))} [{status_emoji}] → <b>{choice}</b>`
+
+**Status emoji map** (canonical — do not alter without §2 revision):
+ACTIVE 🟢 · REJECTED 🔴 · EXECUTED ✅ · EXPIRED ⏰ · default ⏳
+
+**Empty states** (canonical — §5 alignment):
+- govlist empty: `⚠️ <b>No active proposals</b>` + governance navigation keyboard
+- govhistory empty: `📜 <b>No vote history</b>` + governance navigation keyboard
+
+**WELCOME_MESSAGE title** (HTML entity, Phase 6-UX.1 / UX.2):
+`Financial &amp; Political` — renders as "Financial & Political" in Telegram.
+Never use the word `and` in place of the entity in the title string.
+
+<!-- ============================================================
+     §15 — govlist Layout: Queued / Active Voting Groups (P6-UX.2-Fix)
+     Supersedes the govlist line format defined in §14.
+     ============================================================ -->
+## §15 — govlist Layout: Queued / Active Voting Groups
+
+This layout supersedes the single-line format from §14 (Phase 6-UX.2).
+Do not revert to the flat list format without opening a new phase.
+
+**Header (fixed):**
+`🏛️ <b>Celo Governance — Active Proposals</b>`
+
+**Queued block:**
+- If empty: `⏳ <b>Queued:</b> None`
+- If items: `⏳ <b>Queued:</b>` followed by numbered lines (sorted desc)
+
+**Active Voting block:**
+- If empty: `🗳️ <b>Active Voting:</b> None`
+- If items: `🗳️ <b>Active Voting:</b>` followed by numbered lines (sorted desc)
+
+**Line format (per proposal):**
+`{n}. <a href="{hesc(url)}">{hesc(id)} — {hesc(title)}</a>`
+- Index `{n}` restarts at 1 for each group independently.
+- `hesc()` mandatory on ALL dynamic fields.
+- URL = `https://celo.stake.id/#/governance/proposal/{id}`
+
+**Title fallback:**
+`p.title` does not exist in the on-chain fetcher — title is always `"Proposal #{id}"`.
+
+**Footer (always present):**
+`<i>Tap a proposal ID to open details, vote, or create an Auto-Trade.</i>`
+
+**Mandatory send flags:**
+- `parse_mode=ParseMode.HTML`
+- `disable_web_page_preview=True` — prevents CGP link previews from polluting the message.
+
+**Empty state (§5, unchanged):**
+`⚠️ <b>No active proposals</b>` + governance keyboard — fires when both lists are falsy.
+
+<!-- ============================================================
+     §16 — Error States Are UI Responses (P6-UX.6)
+     Placed as §16 because §12 is reserved for Celo Sepolia (above).
+     ============================================================ -->
+## §16 — Error States Are UI Responses
+
+**Principle:** Error states are UI responses, not silent exceptions.
+Bare `except: pass` in a callback handler that sends user-facing content is a UX regression.
+
+**Canonical empty / error states (use `parse_mode=ParseMode.HTML` where applicable):**
+
+| Situation | Emoji (§2) | Approved copy | Method |
+|---|---|---|---|
+| RPC / web3 failure | ⚠️ | `⚠️ <b>On-chain data unavailable</b>` + `RPC node is unreachable.` | `edit_message_text` + visible keyboard (`get_governance_keyboard`) |
+| AI session expired | ⏰ | `⏰ Session expired. Use /aitrade again.` | `query.answer(..., show_alert=True)` — never edit the message |
+| Missing wallet (DeFi) | 💼 | `💼 <b>Wallet not registered</b>` + `0x…` instruction | `reply_text` or `edit_message_text` aligned with §5 |
+| HTML `BadRequest` | ⚠️ | `⚠️ Display error. Please try again.` | `[HTML_ERROR]` log + `reply_text` without `parse_mode` |
+
+**Exceptions that MAY stay silent (§10):**
+- `edit_message_reply_markup` — "message is not modified" is expected
+- `delete_message` — failure when the message is already gone
+- `answer_callback_query` after timeout — Telegram drops it silently
+
+**Must not stay silent:**
+- `except Exception: pass` in handlers that deliver content to the user
+- RPC failure that leaves the user on a blank or loading screen with no feedback
+
+**Explicit carve-out — `proposal_` deep link (§13):** The silent path in
+`deliver_proposal_summary_from_anchor(..., silent_failure=True)` and fall-through to
+`WELCOME_MESSAGE` is intentional. Do not replace it with user-visible errors.
+`_try_delete_telegram_message` and any `except Exception: pass` that exist only to
+support that fallback must not be "fixed" by automated refactors.
+
+<!-- ============================================================
+     §17 — Protected Copy: Wallet, Settings & Menu Layout
+     ============================================================ -->
+## §17 — Protected Copy: Wallet, Settings & Menu Layout
+
+**Wallet confirmation copy** (approved, Phase 6-UX.4):
+- Trigger: EVM address captured by regex `^0x[a-fA-F0-9]{40}$`
+- Display: `truncate_wallet(addr)` inside `<code>` tag — never full address (§6).
+- Body: `✅ <b>Wallet registered</b>` + `<i>Your trades and votes are now linked.</i>`
+- parse_mode: `ParseMode.HTML`
+
+**PREMIUM_MESSAGE** (repositioned, Phase 6-UX.4):
+- Renamed semantically to "Early Supporter" copy.
+- premium:7d · premium:30d · premium:confirm callbacks remain in codebase as legacy.
+- /confirmpayment remains active even after Phase 9 Share & Earn is live (§7).
+- Never remove these handlers without an explicit new phase entry in this file.
+
+**get_main_keyboard() layout** (approved, Phase 6-UX.4):
+- [💎 Premium] button replaced by [💰 Earnings] → callback `menu:earnings`.
+- Do not revert to Premium button without a new phase.
+- `menu:earnings` shows the same earnings dashboard HTML as `/earnings` (`build_earnings_dashboard_html` + `get_earnings_dashboard_keyboard` — Back → `menu:main`).
+
+**Row 5 — On-chain activity** (approved, Phase 6-UX.8):
+- Full-width `[📜 On-chain activity]` → `menu:onchain_hub`.
+- Hub copy: `ONCHAIN_HUB_MESSAGE` in `src/bot/handlers.py` (static HTML).
+- Hub keyboard: `onchain:txlist:all` · `onchain:txlist:governance` · `onchain:txlist:aitrade` · `menu:main` (Back). Tx-list screen: row `url=` **Full history on explorer** (`celo.blockscout.com` mainnet) + row **Back** → `menu:onchain_hub` (§4 — `url=` never on same row as callback).
+
+**Settings header** (approved, Phase 6-UX.4):
+- Context line: `<i>Manage your alerts, network, and wallet preferences.</i>`
+- parse_mode: `ParseMode.HTML`
+
+**Phase 9 — P-ECO.4 (Share & Earn on proposal view):**
+- [🔗 Share & Earn] on the individual proposal keyboard (`gov:share:<pid>`) — **implemented**; see §4.
+
+**P-ECO.5 — earnings_handler:** `/earnings` — referral stats (`get_referral_stats`), wallet line (`user_wallet` / `wallet_address`), HTML + `disable_web_page_preview=True` — **implemented**.
+
+**P-Teste Phase 8:** `parse_proposal_start_deep_link` in `handlers.py`; `gov:share` — empty `BOT_USERNAME` → `[SHARE_ERROR]` + `show_alert` (no link). Ubeswap `feeTo` only when `TREASURY_ADDRESS` is a valid EVM address. Earnings: no wallet + zero referrals → empty-state italic copy; otherwise counter grid (+ optional zero-referral tip when wallet present). Automated checks: `tests/test_referral_economy_phase8.py`.
+
+<!-- ============================================================
+     §18 — Network Toggle Layout
+     ============================================================ -->
+## §18 — Network Toggle Layout
+
+**Buttons** (present in: `get_main_keyboard` row with Vote Alerts, `get_settings_keyboard`, `get_wallet_keyboard`):
+- `[🟡 Mainnet / 🍪 Alfajores / 🔵 Sepolia]` (label reflects active network) → `net:switch`
+- One button per screen — tap cycles **mainnet → alfajores → sepolia → mainnet**.
+- Persists via `DatabaseManager.set_chain_network` (updates both `users.network` and `users.preferred_network`).
+
+**Rules:**
+- Keep callback `net:switch` — do not rename (router and refresh logic depend on it).
+- Do not add a separate Sepolia callback or a fourth network button without a new phase entry in this file.
+
+<!-- ============================================================
+     §19 — message.text Matching Anti-Pattern
+     ============================================================ -->
+## §19 — message.text Matching Anti-Pattern
+
+Telegram's `message.text` always returns **plain text** — HTML tags are stripped.
+
+**CORRECT:**
+```python
+is_settings_root = "⚙️ Settings" in message_text
+is_wallet_menu   = "Set Wallet" in message_text
+```
+
+**WRONG — always evaluates to False:**
+```python
+is_settings_root = message_text.startswith("<b>⚙️ Settings</b>")
+```
+
+This rule applies to every screen detection in `_refresh_keyboard_after_preference_change`
+and any future function that inspects `message.text` to determine current screen context.
+
+<!-- ============================================================
+     §20 — Protected Copy & Layout: AI Trade (Digest + /aitrade)
+     Roadmap: GovAI Hub nativo — Fase 4 HTML copy pass + AI Trade extensions
+     ============================================================ -->
+## §20 — Protected Copy & Layout: AI Trade (Digest + `/aitrade`)
+
+**Authority:** `docs/ai-trade-handoff.md` is the **source of truth** for technical
+behavior; this section is the **UI protection contract** for the same flows.
+
+### Digest path (`digest:latest` → `digest:link:…`)
+
+**Callbacks / modules:** `_handle_digest_link`, `_edit_ai_trade_result` in
+`src/bot/callbacks.py`; `fetch_url_text` in `src/utils/url_fetch.py`;
+`build_personalized_trading_dex_keyboard` + pair resolution via
+`resolve_swap_pair_from_suggestions` (`src/utils/celo_token_registry.py` +
+`src/utils/defi_links.py`); market stats via `fetch_trade_token_market_stats`
+(`src/fetchers/coingecko_prices.py`, multi-fiat `vs_currencies` for stablecoins);
+optional fiat on-ramp rows via `build_onramp_keyboard_rows`
+(`src/utils/onramp_links.py`).
+
+**Must not regress (without a new phase entry here):**
+
+1. **Loading:** Plain text cue **“Reading article…”** plus the short article label
+   (HTML italic). English only.
+2. **Result header:** `💹 <b>AI Trade — {title}</b>` with dynamic title passed through
+   `hesc()` + `truncate()` per §11.
+3. **Numbered suggestion list:** **2 to 5** lines (`1.` … `N.`), each line wrapped in
+   `<b>…</b>`. Groq-driven labels must stay emoji-led per prompt; fallbacks use the
+   approved pool in code (varied staking / swap / stable angles). Do not collapse back
+   to three identical generic lines.
+4. **Shortcuts subsection:** Bold line **exactly**  
+   `<b>On-chain Celo — trading shortcuts</b>`  
+   (separate from §8 disclaimer).
+5. **Disclaimer:** §8 **exact** HTML line (italic), **after** the shortcuts title:
+   ```html
+   <i>AI shortcuts open deep links — complete swaps in your wallet. The bot never holds your keys.</i>
+   ```
+6. **Market context (digest):** Optional italic **Spot (CoinGecko)** line + per-line
+   enrichment. **Stablecoins** may show **multi-fiat** reference (e.g. USD + EUR/BRL)
+   when CoinGecko returns extra `vs_currencies` (see `COINGECKO_FIAT_CURRENCIES` /
+   cache in `coingecko_prices.py`). Optional **Celo on-chain TVL** (DeFi Llama) per
+   existing intent rules. English only.
+7. **Keyboard (digest result):**  
+   - **DEX rows:** Only `https://` `url=` from `build_personalized_trading_dex_keyboard`
+     (pair-aware Ubeswap / Uniswap / Jumper + other venue links). **Two** `url=`
+     buttons per row (approved layout).  
+   - **Optional on-ramp row (stablecoins in Groq suggestions or resolved swap pair):**
+     `https://` `url=` from `build_onramp_keyboard_rows`: **Transak** and **Ramp** only
+     if `TRANSAK_API_KEY` / `RAMP_HOST_API_KEY` are set; **Celo on-ramps (directory)**
+     → `https://docs.celo.org/home/ramps` when this row is shown. **Max 3** `url=`
+     buttons in that row (§4). Optional `walletAddress` / `userAddress` prefill from
+     `db.get_wallet` when the user has registered a wallet.  
+   - **Final row only:** `callback_data` **⬅️ Back** (`back:{digest_id}`). **Never** put
+     `url=` and `callback_data=` on the same row (§4).
+8. **Send flags:** `parse_mode=ParseMode.HTML`, `disable_web_page_preview=True` on the
+   result message.
+
+### Command `/aitrade` + `ai_pick:`
+
+- Up to **five** `InlineKeyboardButton` rows with `callback_data` `ai_pick:<session_id>:<index>`.
+- After pick, `build_venue_links` + wallet copy remains English; session expiry
+  alert per §5 / §16 (`Use /aitrade again.`).
+
+### Roadmap alignment (GovAI Hub nativo)
+
+- Fase 4 **P8 / P8.1 / P8.2 / P9** define Groq JSON, `/aitrade`, `ai_pick`, and
+  `build_venue_links`. Digest **Daily Sources** AI Trade, personalized DEX keyboard,
+  **pair-aware** swap links, **CoinGecko multi-fiat** stablecoin spot lines, and
+  **fiat on-ramp** URL rows (`onramp_links.py`) are **extensions** — regressions must
+  be caught by §7 + this §20 and by `docs/ai-trade-handoff.md` reviews (keep handoff
+  doc aligned with this §20).

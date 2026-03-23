@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import ast
 import json
-import html
 import logging
 import os
 import re
@@ -14,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import uuid
 
-import telegram.error
+from telegram.error import BadRequest
 
 from telegram import (
     InlineKeyboardButton,
@@ -30,30 +28,37 @@ from telegram.helpers import escape_markdown
 from web3 import Web3
 
 from src.ai.digest_generator import digest_generator
-from src.ai.groq_client import groq_client, generate_proposal_summary
+from src.ai.groq_client import get_ai_suggestions, groq_client, generate_proposal_summary
+from src.ai.prompt_builder import parse_ai_suggestions
 from src.bot.keyboards import (
+    build_govlist_keyboard,
     get_digest_keyboard,
+    get_earnings_dashboard_keyboard,
     get_help_keyboard,
     get_main_keyboard,
-    governance_keyboard,
     get_governance_keyboard,
     get_premium_keyboard,
+    get_proposal_vote_keyboard,
     get_settings_keyboard,
 )
 from src.database.manager import DatabaseManager, db
 from src.database.models import GovernanceAlert
 from src.fetchers.fetcher_manager import fetcher_manager
+from src.fetchers.onchain_fetcher import fetch_treasury_balance
 from src.fetchers.governance_fetcher import (
     GOVERNANCE_ADDRESS,
     get_active_proposals_onchain,
     get_historical_proposals_onchain,
     get_proposal_url_onchain,
+    resolve_proposal_status_key,
 )
-from src.utils.config_loader import CONFIG
 from src.utils.env_validator import get_env_or_fail
 from src.utils.cache_manager import cache
 from src.utils.rate_limiter import rate_limiter
 from src.utils.text_extractor import extract_proposal_text, FALLBACK_TEXT
+from src.utils.digest_links import extract_links_from_digest
+from src.utils.text_utils import hesc, truncate, truncate_wallet, proposal_header
+from src.utils.user_network import effective_user_network
 
 # ── cUSD payment verification constants ───────────────────────────────────────
 
@@ -137,10 +142,8 @@ def _format_relative_time(dt: datetime) -> str:
 
 
 def _shorten_address(address: str) -> str:
-    """Shorten a 0x address to 0x1234...abcd format."""
-    if len(address) < 10:
-        return address
-    return f"{address[:6]}...{address[-4:]}"
+    """Shorten a 0x address for display (canonical ellipsis)."""
+    return truncate_wallet(address)
 
 
 def _format_governance_list(alerts: list[GovernanceAlert]) -> str:
@@ -191,74 +194,223 @@ def admin_only(handler):
         return await handler(update, context)
     return wrapper
 
+# Protected copy — do not alter without explicit review in ui_protection.mdc
 WELCOME_MESSAGE = (
-    "🍪 Welcome to <b>Celo GovAI Hub!</b> 🟡 Your mobile-first, network-agnostic AI terminal "
-    "for the Celo Ecosystem, On-chain Insights, and Daily Digests—secured by Celo's native "
-    "<code>LockedGold</code> architecture.\n\n"
-    "To get started, please register your Celo wallet to enable automatic premium and governance features. "
-    "(Start with 👛 /setwallet, then explore 🏛️ /governance).\n\n"
-    "📰 /digest — Today's Celo digest (Daily at 08:30 AM Europe/Madrid)\n"
-    "🤖 /ask — Chat with the Celo AI agent\n"
-    "🏛️ /governance — Access the Gov Hub\n"
-    "⭐️ /premium — Upgrade with cUSD\n\n"
-    "👉 Use the buttons below to toggle 🔔 Vote Alerts or switch your Network (🟡 Mainnet/🍪 Alfajores)."
+    "<b>🤖 GovAI Hub — Financial &amp; Political AI Agent</b>\n\n"
+    "<i>Network-agnostic AI for Celo governance, DeFi &amp; treasury.</i>\n\n"
+    "• 🗳️ Vote on active proposals\n"
+    "• 🌱 Liquid staking with stCELO\n"
+    "• 🔔 Auto-Trade alerts when proposals pass\n"
+    "• 🏛️ DAO Treasury payouts (groups)\n\n"
+    "Send your wallet address (0x\u2026) to get started."
+)
+
+# Protected copy — do not alter without explicit review in ui_protection.mdc (§17 — On-chain hub)
+ONCHAIN_HUB_MESSAGE = (
+    "<b>📜 On-chain activity</b>\n\n"
+    "<i>Review recent transactions for your registered wallet. "
+    "The bot reads public chain data — you sign in your wallet for any action.</i>\n\n"
+    "• <b>All activity</b> — native and token transfers (full feed).\n"
+    "• <b>Governance</b> — transactions to the Celo Governance contract only.\n"
+    "• <b>AI Trade</b> — token transfers involving known DeFi / staking assets.\n\n"
+    "<i>Slash commands are listed in ❓ Help on the main menu.</i>"
 )
 
 # Kept for backward compatibility where older handlers might still reference START_MESSAGE.
 START_MESSAGE = WELCOME_MESSAGE
+# Protected copy — do not alter without explicit review in ui_protection.mdc
+# Wallet & Premium in /help: /premium replaced by /earnings (Phase 9 Share & Earn)
 HELP_MESSAGE_TEXT = (
-    "📚 <b>Celo GovAI Hub - Command Center</b>\n\n"
-    "<b>🤖 AI & Insights</b>\n"
-    "• /ask &lt;question&gt; - Chat with the AI about the Celo ecosystem.\n"
-    "• /proposal &lt;id&gt; - Get an ELI5 AI summary of a governance proposal.\n\n"
-    "<b>🏛️ Governance & Voting</b>\n"
-    "• /governance - Open the main governance dashboard.\n"
-    "• /govlist - List active and queued proposals on-chain.\n"
-    "• /govhistory - View past governance decisions.\n"
-    "• /govstatus - Check your LockedGold balance and delegation status.\n"
-    "• /vote &lt;id&gt; &lt;YES|NO|ABSTAIN&gt; - Cast your on-chain vote.\n"
-    "• /delegate - Instructions to delegate voting power to the bot.\n"
-    "• /revoke - Instructions to revoke your delegation.\n\n"
-    "<b>💼 Account & Settings</b>\n"
-    "• /setwallet &lt;address&gt; - Link your Celo wallet.\n"
-    "• /premium - Upgrade your tier using cUSD.\n"
-    "• /confirmpayment - Verify your premium payment on-chain.\n\n"
+    "<b>🤖 GovAI Hub — Command Center</b>\n\n"
+    "<b>🤖 AI &amp; Insights</b>\n"
+    "• /ask &lt;question&gt; — Chat with the AI about Celo.\n"
+    "• /proposal &lt;id&gt; — ELI5 AI summary of a proposal.\n"
+    "• /aitrade &lt;intent&gt; — AI-powered DeFi suggestions.\n\n"
+    "<b>🏛️ Governance &amp; Voting</b>\n"
+    "• /governance — Open the governance dashboard.\n"
+    "• /govlist — Active and queued proposals on-chain.\n"
+    "• /govhistory — Your recorded votes on proposals.\n"
+    "• /govstatus — LockedGold balance &amp; delegation.\n"
+    "• /vote &lt;id&gt; &lt;YES|NO|ABSTAIN&gt; — Cast your vote.\n"
+    "• /delegate — Delegate your voting power.\n"
+    "• /revoke — Revoke your delegation.\n\n"
+    "<b>💼 Wallet &amp; Premium</b>\n"
+    "• /setwallet — Register your EVM wallet address\n"
+    "• /earnings — Check your referral rewards\n"
+    "• /confirmpayment — Confirm a legacy premium payment\n\n"
+    "<b>🏛️ Treasury (groups)</b>\n"
+    "• /payout @user &lt;amount&gt; [CELO|USDm|USDC] — DAO payout.\n\n"
+    "<b>🌐 Networks:</b> 🟡 Mainnet · 🍪 Alfajores · 🔵 Sepolia\n"
+    "<i>Switch anytime via ⚙️ Settings.</i>\n\n"
     "<b>⚙️ General</b>\n"
-    "• /start - Show the main menu.\n"
-    "• /help - Display this guide."
+    "• /start — Show the main menu.\n"
+    "• /help — Display this guide.\n\n"
+    "<i>Use the menu buttons for the full experience.</i>"
 )
 
+# Protected copy — do not alter without explicit review in ui_protection.mdc
 GOVERNANCE_HUB_MESSAGE = (
-    "🏛️ <b>Celo Governance Hub</b>\n\n"
-    "Welcome to the mobile-first governance terminal. Participate directly from your phone "
-    "using Celo's native LockedGold architecture.\n\n"
-    "📊 <b>Proposals & Voting</b>\n"
-    "📋 <b>/govlist</b> — View active & queued proposals on-chain\n"
-    "📜 <b>/govhistory</b> — View past executed/rejected proposals\n"
-    "💡 <b>/proposal [id]</b> — Get an AI summary (ELI5) of a proposal\n"
-    "🗳️ <b>/vote [id] [YES/NO/ABSTAIN]</b> — Cast your vote\n\n"
-    "⚙️ <b>Delegation & Status</b>\n"
-    "👛 <b>/delegate</b> — How to delegate your LockedGold to the bot\n"
-    "🔍 <b>/govstatus</b> — Check your current delegation status\n"
-    "⏪ <b>/revoke</b> — Revoke your delegation"
+    "<b>🏛️ GovAI Hub — Governance</b>\n\n"
+    "<i>Vote, stake, and track Celo proposals in one place.</i>\n\n"
+    "Tap a proposal ID to open details, vote, or create an Auto-Trade."
 )
 
+# Status emoji map aligned with §2 of ui_protection.mdc
+GOVERNANCE_STATUS_EMOJI = {
+    "ACTIVE": "🟢",
+    "REJECTED": "🔴",
+    "EXECUTED": "✅",
+    "EXPIRED": "⏰",
+}
+
+
+def format_govlist_proposals_html(queued: list, active: list) -> str:
+    """Build HTML body for the active governance proposal list, grouped by status.
+
+    Queued and Active Voting are shown as separate numbered blocks.
+    Title falls back to "Proposal #id" since on-chain data is IDs only.
+    All dynamic values are escaped via hesc().
+    """
+    def _proposal_line(n: int, pid: int) -> str:
+        safe_id = hesc(str(pid))
+        safe_title = hesc(f"Proposal #{pid}")
+        safe_url = hesc(f"https://celo.stake.id/#/governance/proposal/{pid}")
+        return f'{n}. <a href="{safe_url}">{safe_id} — {safe_title}</a>\n'
+
+    queued_ids = sorted({int(x) for x in queued}, reverse=True)
+    active_ids = sorted({int(x) for x in active}, reverse=True)
+
+    if queued_ids:
+        queued_block = "⏳ <b>Queued:</b>\n" + "".join(
+            _proposal_line(i + 1, pid) for i, pid in enumerate(queued_ids)
+        ) + "\n"
+    else:
+        queued_block = "⏳ <b>Queued:</b> None\n\n"
+
+    if active_ids:
+        active_block = "🗳️ <b>Active Voting:</b>\n" + "".join(
+            _proposal_line(i + 1, pid) for i, pid in enumerate(active_ids)
+        ) + "\n"
+    else:
+        active_block = "🗳️ <b>Active Voting:</b> None\n\n"
+
+    return (
+        "🏛️ <b>Celo Governance — Active Proposals</b>\n\n"
+        + queued_block
+        + active_block
+        + "<i>Tap a proposal ID to open details, vote, or create an Auto-Trade.</i>"
+    )
+
+
+async def format_governance_history_combined_html(user_id: int) -> str:
+    """Build Governance History: optional DB vote rows + on-chain concluded proposal IDs."""
+    user_votes = await db.list_user_governance_votes(user_id, limit=40)
+    votes_block = ""
+    if user_votes:
+        keys: list[object] | None
+        try:
+            rpc_url = get_env_or_fail("CELO_RPC_URL")
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+            keys = await asyncio.gather(
+                *[
+                    resolve_proposal_status_key(
+                        w3, str(GOVERNANCE_ADDRESS), int(v.proposal_id)
+                    )
+                    for v in user_votes
+                ],
+                return_exceptions=True,
+            )
+        except Exception as e:
+            logger.warning("[RPC_ERROR] on-chain call failed: %s", e)
+            keys = None
+
+        vote_lines: list[str] = []
+        for idx, vote in enumerate(user_votes):
+            status_key = "UNKNOWN"
+            if keys is not None and idx < len(keys):
+                sk = keys[idx]
+                if not isinstance(sk, BaseException):
+                    status_key = str(sk)
+            emoji = GOVERNANCE_STATUS_EMOJI.get(status_key.upper(), "⏳")
+            raw_title = f"Proposal #{vote.proposal_id}"
+            title = hesc(truncate(raw_title, 80))
+            choice = hesc(str(vote.vote_choice))
+            vote_lines.append(
+                f"#{vote.proposal_id} — {title} [{emoji}] → <b>{choice}</b>"
+            )
+        votes_block = "<b>Your votes:</b>\n" + "\n".join(vote_lines) + "\n\n"
+
+    try:
+        rpc_url = get_env_or_fail("CELO_RPC_URL")
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+        concluded = await get_historical_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
+        if concluded:
+            ids_str = ", ".join(str(pid) for pid in concluded)
+            concluded_block = (
+                "<b>Recent concluded proposals</b> "
+                "<i>(Executed, Rejected, or Expired):</i>\n"
+                f"{hesc(ids_str)}\n\n"
+                "<i>Use /proposal &lt;id&gt; to read an AI summary of any historical proposal.</i>"
+            )
+        else:
+            concluded_block = "<i>No concluded proposals found on-chain.</i>"
+    except Exception as e:
+        logger.warning("[RPC_ERROR] on-chain call failed: %s", e)
+        concluded_block = (
+            "⚠️ <b>On-chain data unavailable</b>\n\nThe RPC node is unreachable."
+        )
+
+    return (
+        "<b>📜 Governance History</b>\n\n"
+        "<i>Your past votes on Celo proposals.</i>\n\n"
+        + votes_block
+        + concluded_block
+    )
+
+# Legacy premium copy — repositioned as Early Supporter for Phase 9 Share & Earn
+# Do NOT remove premium:7d, premium:30d, premium:confirm or /confirmpayment
 PREMIUM_MESSAGE = (
-    "Premium — Celo GovAI Hub\n\n"
-    "Unlock unlimited AI queries and the best Celo insights.\n\n"
-    f"7-day Premium  — {PLAN_7D_CUSD:.1f} cUSD\n"
-    f"30-day Premium — {PLAN_30D_CUSD:.1f} cUSD\n\n"
-    "Send cUSD stablecoin to:\n"
-    "{BOT_WALLET}\n\n"
-    "Send from a personal wallet (MiniPay, Valora, MetaMask).\n"
-    "Important: you must send the cUSD stablecoin (not the native token) to the bot wallet above.\n"
-    "Exchanges use intermediate addresses and won't be detected.\n\n"
-    "After sending, tap the button below or use:\n"
-    "/confirmpayment [tx_hash]"
+    "<b>💎 GovAI Hub — Early Supporter</b>\n\n"
+    "<i>Thank you for supporting GovAI Hub.</i>\n\n"
+    "Your premium access remains active.\n"
+    "Use /earnings to track your referral rewards.\n\n"
+    "<i>New users: share proposals to earn USDm rewards.\n"
+    "No subscription needed.</i>"
 )
 
 
 # ── /start ─────────────────────────────────────────────────────────────────────
+
+
+def parse_proposal_start_deep_link(raw: str) -> tuple[int | None, int | None]:
+    """Parse ``proposal_<id>`` and optional ``_ref_<referrer_id>`` from /start payload.
+
+    Malformed ``_ref_`` segments degrade to ``referrer_id=None`` (P-Teste scenario 5).
+
+    Args:
+        raw: First ``context.args[0]`` value, e.g. ``proposal_42`` or ``proposal_42_ref_67890``.
+
+    Returns:
+        ``(proposal_id, referrer_id)`` — either may be None.
+    """
+    ref_parts = raw.split("_ref_", 1)
+    proposal_part = ref_parts[0]
+    referrer_id = None
+    if len(ref_parts) > 1:
+        try:
+            referrer_id = int(ref_parts[1])
+        except ValueError:
+            referrer_id = None
+
+    proposal_id = None
+    if proposal_part.startswith("proposal_"):
+        try:
+            proposal_id = int(proposal_part.split("_", 1)[1])
+        except (IndexError, ValueError):
+            proposal_id = None
+
+    return proposal_id, referrer_id
+
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
@@ -267,13 +419,43 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     username = user.username
     first_name = user.first_name
 
-    await db.get_or_create_user(user_id, username, first_name)
+    db_user = await db.get_or_create_user(user_id, username, first_name)
     await db.update_subscription(user_id, True)
+
+    chain_net = effective_user_network(db_user)
+    notifications_enabled = getattr(db_user, "notifications_enabled", True)
+
+    # Deep link: proposal_<id> or proposal_<id>_ref_<referrer_id> (P6-UX.7, P-ECO.3)
+    raw = context.args[0] if context.args else ""
+    proposal_id, referrer_id = parse_proposal_start_deep_link(raw)
+
+    if referrer_id and referrer_id != user_id and proposal_id:
+        try:
+            await db.set_referred_by(user_id, referrer_id)
+            await db.add_gov_points(referrer_id, 5)
+            await db.create_referral(referrer_id, user_id, proposal_id)
+        except Exception as exc:
+            logger.error("[START] Failed to process referral | user=%s ref=%s prop=%s | error=%s",
+                         user_id, referrer_id, proposal_id, exc)
+
+    if proposal_id is not None:
+        delivered = await deliver_proposal_summary_from_anchor(
+            update.message,
+            proposal_id,
+            edit_same_message=False,
+            silent_failure=True,
+        )
+        if delivered:
+            return
 
     await update.message.reply_text(
         WELCOME_MESSAGE,
         parse_mode=ParseMode.HTML,
-        reply_markup=get_main_keyboard(),
+        reply_markup=get_main_keyboard(
+            preferred_network=chain_net,
+            notifications_enabled=notifications_enabled,
+        ),
+        disable_web_page_preview=True,
     )
 
 
@@ -285,6 +467,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         HELP_MESSAGE_TEXT,
         parse_mode=ParseMode.HTML,
         reply_markup=get_help_keyboard(),
+        disable_web_page_preview=True,
     )
 
 
@@ -331,7 +514,7 @@ async def subscribe_handler(
     logger.info("[SUBSCRIBE] User subscribed | user=%s", user_id)
 
     await update.message.reply_text(
-        "You are now subscribed to Celo GovAI Hub!\n\n"
+        "You are now subscribed to GovAI Hub!\n\n"
         f"Next digest: {_next_digest_str()}\n\n"
         "You will receive a daily AI-powered Celo digest automatically.\n\n"
         "Commands:\n"
@@ -397,7 +580,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if is_premium and premium_expires_at:
         message = (
-            "Your Celo GovAI Hub Status\n\n"
+            "Your GovAI Hub Status\n\n"
             "Plan: Premium\n"
             f"Expires: {premium_expires_at.strftime('%b %d, %Y')}\n"
             "AI model: llama-3.3-70b-versatile (unlimited asks)\n\n"
@@ -405,7 +588,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     else:
         message = (
-            "Your Celo GovAI Hub Status\n\n"
+            "Your GovAI Hub Status\n\n"
             "Plan: Free\n"
             "AI model: llama-3.1-8b-instant (3 asks/day)\n\n"
             "Next digest: today at 08:30 CET (Europe/Madrid)\n\n"
@@ -444,7 +627,7 @@ async def premium_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
     await update.message.reply_text(
-        f"Premium plans — Celo GovAI Hub\n\n"
+        f"Premium plans — GovAI Hub\n\n"
         f"7-day Premium  — {PLAN_7D_CUSD:.1f} cUSD\n"
         f"30-day Premium — {PLAN_30D_CUSD:.1f} cUSD\n\n"
         f"Send cUSD stablecoin to:\n"
@@ -505,6 +688,28 @@ async def setwallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"Premium will activate automatically within ~60 seconds after on-chain confirmation.\n\n"
         "Governance: after you delegate LockedGold voting power to the bot wallet, "
         "run /govstatus to confirm the delegation on-chain."
+    )
+
+
+async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Capture EVM wallet address sent as plain text and register it."""
+    user_id = update.effective_user.id
+    raw = update.message.text.strip()
+    wallet = Web3.to_checksum_address(raw)
+    await db.get_or_create_user(
+        user_id, update.effective_user.username, update.effective_user.first_name
+    )
+    await db.set_wallet(user_id, wallet)
+    await db.set_user_wallet(user_id, wallet)
+
+    # Display-safe truncated address — never show full address to user (§6)
+    display = truncate_wallet(wallet)
+
+    await update.message.reply_text(
+        f"✅ <b>Wallet registered</b>\n\n"
+        f"💼 <code>{hesc(display)}</code>\n\n"
+        f"<i>Your trades and votes are now linked to this address.</i>",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -716,7 +921,111 @@ async def confirm_payment_handler(
         f"Expires: {expires_at.strftime('%Y-%m-%d')}\n"
         f"Confirmations: {payment['confirmations']}\n"
         f"Method: {payment['method']}\n\n"
-        "You now have unlimited AI queries. Enjoy Celo GovAI Hub Premium!",
+        "You now have unlimited AI queries. Enjoy GovAI Hub Premium!",
+    )
+
+
+# ── /payout ───────────────────────────────────────────────────────────────────
+
+
+async def payout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /payout @username amount [CELO|USDm|USDC] — treasury payout request (P11)."""
+    import re
+
+    PAYOUT_REGEX = re.compile(
+        r"^/payout\s+@(\w+)\s+([\d.]+)\s*(CELO|USDm|USDC)?$"
+    )
+    text = update.message.text or ""
+    match = PAYOUT_REGEX.match(text.strip())
+
+    if not match:
+        await update.message.reply_text(
+            "Usage: <code>/payout @username amount [CELO|USDm|USDC]</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    username = match.group(1)  # without "@"
+    amount = match.group(2)
+    token = match.group(3) or "CELO"
+    quorum = int(os.getenv("TREASURY_QUORUM", "2"))
+
+    # Step 1 — resolve @username → wallet
+    recipient_wallet = await db.get_user_wallet_by_username(username)
+    if not recipient_wallet:
+        await update.message.reply_text(
+            "Recipient wallet not found. Ask them to register with /start."
+        )
+        return
+
+    # Step 2 — read treasury balance (non-blocking fallback on error)
+    balance_data = await fetch_treasury_balance(token)
+    if balance_data["error"]:
+        balance_display = "unavailable"
+    else:
+        balance_display = f"{balance_data['balance']} {token}"
+
+    # Step 3 — delete original command message
+    try:
+        await update.message.delete()
+    except BadRequest:
+        pass
+
+    # Step 4 — build HTML receipt
+    requester_id = update.effective_user.id
+    requester_username = update.effective_user.username or str(requester_id)
+    chat_id = update.effective_chat.id
+
+    wallet_short = truncate_wallet(recipient_wallet)
+
+    expiry_utc = datetime.now(timezone.utc) + timedelta(hours=24)
+    expiry_str = expiry_utc.strftime("%Y-%m-%d %H:%M UTC")
+
+    receipt_text = (
+        f"💸 <b>Payout Request</b>\n\n"
+        f"👤 <b>Requester:</b> @{hesc(requester_username)}\n"
+        f"📬 <b>Recipient:</b> @{hesc(username)} "
+        f"(<code>{hesc(wallet_short)}</code>)\n"
+        f"💰 <b>Amount:</b> {hesc(amount)} {hesc(token)}\n"
+        f"🏦 <b>Treasury balance:</b> {hesc(balance_display)}\n"
+        f"⏳ <b>Status:</b> Pending (0/{quorum})\n"
+        f"🕐 <b>Expires:</b> {expiry_str}"
+    )
+
+    # Step 5 — persist and update message_id
+    payout_id = await db.save_payout_request(
+        chat_id=chat_id,
+        requester_id=requester_id,
+        recipient_username=username,
+        recipient_wallet=recipient_wallet,
+        amount=amount,
+        token=token,
+    )
+
+    # Send receipt with correct payout_id in button
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"✅ Approve (0/{quorum})",
+                    callback_data=f"payout:approve:{payout_id}",
+                )
+            ]
+        ]
+    )
+
+    sent = await update.effective_chat.send_message(
+        text=receipt_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+    await db.update_payout_message_id(payout_id, sent.message_id)
+
+    # Step 6 — log
+    print(
+        f"[PAYOUT] created id={payout_id} token={token} "
+        f"amount={amount} recipient={recipient_wallet}"
     )
 
 
@@ -724,11 +1033,11 @@ async def confirm_payment_handler(
 
 
 async def _safe_edit(message, text: str) -> None:
-    """Attempt to edit a Telegram message; silently ignores failures to avoid masking the original error."""
+    """Attempt to edit a Telegram message; logs failures to avoid masking errors."""
     try:
         await message.edit_text(text)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[UI_UTILS] _safe_edit failed: %s", exc)
 
 
 async def _safe_reply(message, text: str, reply_markup=None) -> None:
@@ -741,7 +1050,7 @@ async def _safe_reply(message, text: str, reply_markup=None) -> None:
     import re as _re
     try:
         await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-    except telegram.error.BadRequest:
+    except BadRequest:
         plain = _re.sub(r"<[^>]+>", "", text).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
         await message.reply_text(plain, reply_markup=reply_markup)
 
@@ -831,23 +1140,29 @@ async def digest_command_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     # Step 7 — Send digest to user
+    link_count = len(await extract_links_from_digest(digest_id))
     delivery_ok = False
     try:
         await loading_msg.edit_text(
             text=digest_text,
-            reply_markup=get_digest_keyboard(digest_id),
+            reply_markup=get_digest_keyboard(digest_id, link_count),
             parse_mode=ParseMode.HTML,
         )
         delivery_ok = True
-    except telegram.error.BadRequest as exc:
+    except BadRequest as exc:
         logger.warning("[DIGEST] edit_text BadRequest for user %s | error: %s", user_id, exc)
         try:
             await loading_msg.edit_text(
-                text=digest_text[:4000],  # safe margin below Telegram's 4096-char limit
-                reply_markup=get_digest_keyboard(digest_id),
+                text=truncate(digest_text, 4000),
+                reply_markup=get_digest_keyboard(digest_id, link_count),
             )
             delivery_ok = True
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "[HTML_ERROR] parse failed in digest delivery | user=%s: %s",
+                user_id,
+                exc,
+            )
             await _safe_edit(loading_msg, "❌ Failed to send digest. Please try again later.")
             return
     except Exception as exc:
@@ -876,14 +1191,26 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     user_id = user.id
 
-    await db.get_or_create_user(user_id, user.username, user.first_name)
+    db_user = await db.get_or_create_user(user_id, user.username, user.first_name)
 
     user_apps = await db.get_user_apps_by_category(user_id)
-    await update.message.reply_text(
-        "⚙️ Celo GovAI Hub — Select Your Apps\n\n"
+    chain_net = effective_user_network(db_user)
+    notifications_enabled = getattr(db_user, "notifications_enabled", True)
+    # Settings header with context line per §3 template
+    settings_text = (
+        "<b>⚙️ Settings</b>\n\n"
+        "<i>Manage your alerts, network, and wallet preferences.</i>\n\n"
         "Tap a category to manage its apps.\n"
-        "✅ = all enabled  ☑️ = some enabled  ☐ = none",
-        reply_markup=get_settings_keyboard(user_apps),
+        "✅ = all enabled  ☑️ = some enabled  ☐ = none"
+    )
+    await update.message.reply_text(
+        settings_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_settings_keyboard(
+            user_apps,
+            preferred_network=chain_net,
+            notifications_enabled=notifications_enabled,
+        ),
     )
     logger.info("[SETTINGS] /settings opened by user %d", user_id)
 
@@ -923,7 +1250,7 @@ def _build_ask_messages(session: dict, new_question: str) -> list[dict]:
     system_msg = {
         "role": "system",
         "content": (
-            "You are Celo GovAI Hub, an enthusiastic AI agent and proud advocate of the "
+            "You are GovAI Hub, an enthusiastic AI agent and proud advocate of the "
             "Celo blockchain ecosystem. Your mission is to inform, inspire, and engage "
             "users about everything happening in the Celo world.\n\n"
 
@@ -1000,7 +1327,7 @@ async def _process_ask(
     escaped = escape_markdown(response_text, version=2)
     try:
         await loading_msg.edit_text(escaped, parse_mode=ParseMode.MARKDOWN_V2)
-    except telegram.error.BadRequest:
+    except BadRequest:
         await loading_msg.edit_text(response_text)
 
     _update_session(session, question, response_text)
@@ -1059,6 +1386,75 @@ async def ask_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _process_ask(update, context, question, session)
 
 
+async def aitrade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /aitrade — generate AI DeFi suggestions via Groq (TTL stored in DB)."""
+    user_id = update.effective_user.id
+
+    user = await db.get_user(user_id)
+    if not getattr(user, "user_wallet", None):
+        await update.message.reply_text(
+            "💼 <b>Wallet not registered</b>\n\n"
+            "<i>Send your EVM address (0x…) to register and use DeFi features.</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user_text = " ".join(context.args) if context.args else ""
+    if not user_text.strip():
+        await update.message.reply_text(
+            "Usage: <code>/aitrade &lt;what you want to do&gt;</code>\n"
+            "Example: <code>/aitrade I want to earn yield on my CELO</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    loading_msg = await update.message.reply_text("🤖 Generating suggestions...")
+
+    try:
+        raw = await get_ai_suggestions(user_text)
+        suggestions = parse_ai_suggestions(raw)
+
+        if not suggestions:
+            await loading_msg.edit_text(
+                "⚠️ Could not generate suggestions. Please try again."
+            )
+            return
+
+        session_id = str(uuid.uuid4())[:8]
+
+        await db.save_ai_session(
+            user_id=user_id,
+            session_id=session_id,
+            suggestions=suggestions,
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    f"🤖 {s['label']}",
+                    callback_data=f"ai_pick:{session_id}:{i}",
+                )
+            ]
+            for i, s in enumerate(suggestions[:5])
+        ]
+        keyboard = InlineKeyboardMarkup(buttons)
+
+        await loading_msg.edit_text(
+            "💡 <b>GovAI Hub — AI Trade Suggestions</b>\n\n"
+            "Choose an action below. You will sign the transaction in your own wallet — "
+            "this bot never holds your keys.\n\n"
+            "<i>Suggestions expire in 24 hours.</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+
+    except Exception as exc:
+        logger.warning("[AITRADE] Failed for user=%s | error=%s", user_id, exc, exc_info=True)
+        await loading_msg.edit_text(
+            "⚠️ AI suggestions unavailable. Please try again later."
+        )
+
+
 async def free_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle free-text messages when an ask session is active (continue conversation)."""
     session = context.user_data.get("ask_session")
@@ -1110,7 +1506,7 @@ async def governance_handler(
                 reply_markup=get_governance_keyboard(),
             )
             return
-        except telegram.error.BadRequest:
+        except BadRequest:
             # Fallback to plain text to keep navigation consistent.
             try:
                 await query.edit_message_text(
@@ -1120,7 +1516,7 @@ async def governance_handler(
                     reply_markup=get_governance_keyboard(),
                 )
                 return
-            except telegram.error.BadRequest:
+            except BadRequest:
                 pass
 
     try:
@@ -1130,7 +1526,7 @@ async def governance_handler(
             disable_web_page_preview=True,
             reply_markup=get_governance_keyboard(),
         )
-    except telegram.error.BadRequest:
+    except BadRequest:
         await message.reply_text(
             text,
             disable_web_page_preview=True,
@@ -1145,47 +1541,290 @@ async def govlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
 
     loading_msg = await update.message.reply_text(
-        "⏳ Fetching active governance proposals from the Celo network..."
+        "⏳ <b>Fetching active proposals…</b>",
+        parse_mode=ParseMode.HTML,
     )
 
     result = await get_active_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
     queued = result.get("Queued", [])
     active = result.get("Active", [])
 
-    queued_str = ", ".join(str(x) for x in queued) if queued else "None"
-    active_str = ", ".join(str(x) for x in active) if active else "None"
+    try:
+        await loading_msg.delete()
+    except BadRequest:
+        pass
 
-    text = (
-        "🏛️ <b>Celo Governance — Active Proposals</b>\n\n"
-        f"⏳ <b>Queued:</b> {queued_str}\n"
-        f"🗳️ <b>Active Voting:</b> {active_str}\n\n"
-        "<i>Use <code>/proposal &lt;id&gt;</code> to read an AI summary and "
-        "<code>/vote &lt;id&gt;</code> to cast your vote.</i>"
+    if not queued and not active:
+        await update.message.reply_text(
+            "⚠️ <b>No active proposals</b>\n\n"
+            "Check back later or use History to review past votes.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_governance_keyboard(
+                back_callback="governance_menu",
+            ),
+            disable_web_page_preview=True,
+        )
+        return
+
+    govlist_text = format_govlist_proposals_html(queued, active)
+    await update.message.reply_text(
+        govlist_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=build_govlist_keyboard(queued, active),
+        disable_web_page_preview=True,
     )
-
-    await loading_msg.edit_text(text, parse_mode=ParseMode.HTML)
 
 
 async def govhistory_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /govhistory — list recently concluded proposal IDs from Celo on-chain state."""
-    rpc_url = get_env_or_fail("CELO_RPC_URL")
-    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+    """Handle /govhistory — user votes (if any) plus concluded proposal IDs on-chain."""
+    user_id = update.effective_user.id if update.effective_user else 0
 
     loading_msg = await update.message.reply_text(
-        "⏳ Fetching governance history from the Celo network..."
+        "⏳ <b>Fetching governance history…</b>",
+        parse_mode=ParseMode.HTML,
     )
 
-    proposal_ids = await get_historical_proposals_onchain(w3, str(GOVERNANCE_ADDRESS))
-    ids_str = ", ".join(str(x) for x in proposal_ids) if proposal_ids else "None"
+    history_text = await format_governance_history_combined_html(user_id)
 
-    text = (
-        "📚 <b>Celo Governance — History</b>\n\n"
-        "<i>Recent concluded proposals (Executed, Rejected, or Expired):</i>\n"
-        f"{ids_str}\n\n"
-        "<i>Use <code>/proposal &lt;id&gt;</code> to read an AI summary of any historical proposal.</i>"
+    try:
+        await loading_msg.delete()
+    except BadRequest:
+        pass
+
+    await update.message.reply_text(
+        history_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_governance_keyboard(
+            back_callback="governance_menu",
+        ),
+        disable_web_page_preview=True,
     )
 
-    await loading_msg.edit_text(text, parse_mode=ParseMode.HTML)
+
+def format_vote_recorded_message(proposal_id: int, vote_choice: str) -> str:
+    """Build the confirmation text after a vote intent is stored."""
+    return (
+        "✅ Your governance vote intent has been recorded.\n\n"
+        f"Proposal: {proposal_id}\n"
+        f"Choice: {vote_choice}\n\n"
+        "The vote will be executed on-chain soon by the BOTWALLET according to the "
+        "governance schedule."
+    )
+
+
+async def register_governance_vote_intent(
+    user_id: int, proposal_id: int, vote_choice: str
+) -> str | None:
+    """Register a governance vote intent for the user.
+
+    Returns:
+        None on success, or a user-facing error message string on failure.
+    """
+    choice = vote_choice.strip().upper()
+    if choice not in {"YES", "NO", "ABSTAIN"}:
+        return "❌ Invalid choice. Use YES, NO, or ABSTAIN."
+
+    user_record = await db.get_user(user_id)
+    if user_record:
+        user_record.delegated_power = True  # FIXME: TEMPORARY BYPASS FOR TESTING
+    if not user_record or not getattr(user_record, "delegated_power", False):
+        return (
+            "❌ You need to delegate your voting power first using /delegate before "
+            "casting votes."
+        )
+
+    await db.register_vote_intent(
+        user_id=user_id,
+        proposal_id=proposal_id,
+        vote_choice=choice,
+    )
+    return None
+
+
+async def _proposal_flow_start_message(
+    anchor_message,
+    text: str,
+    *,
+    edit_same_message: bool,
+):
+    """First step of proposal flow: edit anchor (inline) or reply (e.g. /proposal)."""
+    if edit_same_message:
+        try:
+            await anchor_message.edit_text(
+                text,
+                disable_web_page_preview=True,
+            )
+        except BadRequest:
+            return await anchor_message.reply_text(text)
+        return anchor_message
+    return await anchor_message.reply_text(text)
+
+
+async def _try_delete_telegram_message(message) -> None:
+    """Best-effort delete (e.g. drop loading bubble on silent /start deep-link failure)."""
+    if message is None:
+        return
+    try:
+        await message.delete()
+    except Exception as exc:
+        logger.debug("[UI_UTILS] _try_delete failed: %s", exc)
+
+
+async def deliver_proposal_summary_from_anchor(
+    anchor_message,
+    proposal_id: int,
+    *,
+    edit_same_message: bool = False,
+    silent_failure: bool = False,
+) -> bool:
+    """Fetch proposal URL, AI summary, and vote keyboard from any chat message anchor.
+
+    Resolution order matches /proposal: DB alert first, then on-chain URL fallback.
+
+    Args:
+        anchor_message: Message to reply to, or to edit when ``edit_same_message`` is True.
+        proposal_id: On-chain governance proposal id.
+        edit_same_message: If True (e.g. ``gov:voteview``), update ``anchor_message`` in place
+            instead of sending new loading messages.
+        silent_failure: If True (e.g. ``/start`` deep link), log failures and return False
+            without user-visible error messages; caller may fall back to welcome.
+
+    Returns:
+        True if the summary was shown, False on any failure or early exit.
+    """
+    db_manager = DatabaseManager()
+    alert = await db_manager.get_alert_by_id(proposal_id)
+    description_url: str | None = alert.description_url if alert else None
+
+    if alert is None:
+        loading_msg = await _proposal_flow_start_message(
+            anchor_message,
+            f"⏳ Proposal #{proposal_id} not in local cache — querying Celo network...",
+            edit_same_message=edit_same_message,
+        )
+        logger.info(
+            "[GOV] DB miss for proposal #%s — attempting on-chain fallback",
+            proposal_id,
+        )
+        description_url = await get_proposal_url_onchain(proposal_id)
+
+        if not description_url:
+            logger.info(
+                "[GOV] On-chain fallback returned nothing | proposal_id=%s",
+                proposal_id,
+            )
+            if silent_failure:
+                await _try_delete_telegram_message(loading_msg)
+                return False
+            await loading_msg.edit_text(
+                f"❌ Proposal #{proposal_id} not found on the Celo network."
+            )
+            return False
+
+        logger.info(
+            "[GOV] On-chain fallback resolved URL | proposal_id=%s | url=%s",
+            proposal_id,
+            description_url,
+        )
+        await _safe_edit(loading_msg, "⏳ Analyzing proposal...")
+    else:
+        if not description_url:
+            if silent_failure:
+                return False
+            if edit_same_message:
+                try:
+                    await anchor_message.edit_text(
+                        f"❌ Proposal #{proposal_id} not found on the Celo network.",
+                        disable_web_page_preview=True,
+                    )
+                except BadRequest:
+                    pass
+            else:
+                await anchor_message.reply_text(
+                    f"❌ Proposal #{proposal_id} not found on the Celo network."
+                )
+            return False
+
+        loading_msg = await _proposal_flow_start_message(
+            anchor_message,
+            "⏳ Analyzing proposal...",
+            edit_same_message=edit_same_message,
+        )
+
+    try:
+        proposal_text = await extract_proposal_text(description_url)
+    except Exception as exc:
+        logger.warning(
+            "[GOV] Failed to extract proposal text | id=%s | url=%s | error=%s",
+            proposal_id,
+            description_url,
+            exc,
+        )
+        if silent_failure:
+            await _try_delete_telegram_message(loading_msg)
+            return False
+        await _safe_edit(
+            loading_msg,
+            "❌ Could not load the proposal description. Please open the forum link instead.",
+        )
+        return False
+
+    if proposal_text == FALLBACK_TEXT:
+        if silent_failure:
+            await _try_delete_telegram_message(loading_msg)
+            return False
+        await _safe_edit(
+            loading_msg,
+            "Description text is unavailable for this proposal.\n\n"
+            f"Source: {description_url}",
+        )
+        return False
+
+    try:
+        proposal_data = await generate_proposal_summary(proposal_text)
+    except Exception as exc:
+        logger.error(
+            "[GOV] Proposal summary generation failed | id=%s | error=%s",
+            proposal_id,
+            exc,
+        )
+        if silent_failure:
+            await _try_delete_telegram_message(loading_msg)
+            return False
+        await _safe_edit(
+            loading_msg,
+            "❌ AI summary is temporarily unavailable. Please try again later.",
+        )
+        return False
+
+    summary = proposal_data.get("summary", "Summary unavailable.")
+    prop_title = proposal_data.get("title", "N/A")
+    prop_status = proposal_data.get("status", "ACTIVE")
+
+    final_text = (
+        f"{proposal_header(proposal_id, prop_title, prop_status)}\n"
+        f"🔗 <a href=\"{hesc(description_url)}\">Source</a>\n\n"
+        f"{summary}"
+    )
+
+    reply_markup = get_proposal_vote_keyboard(proposal_id)
+
+    try:
+        await loading_msg.edit_text(
+            text=final_text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[GOV] Failed to send HTML summary, falling back to raw text | error: %s", exc
+        )
+        if silent_failure:
+            await _try_delete_telegram_message(loading_msg)
+            return False
+        await _safe_edit(loading_msg, final_text)
+    return True
 
 
 async def proposal_handler(
@@ -1215,109 +1854,7 @@ async def proposal_handler(
         )
         return
 
-    # Step 1 — local database lookup (fast path, no RPC)
-    db_manager = DatabaseManager()
-    alert = await db_manager.get_alert_by_id(proposal_id)
-    description_url: str | None = alert.description_url if alert else None
-
-    # Step 2 — on-chain fallback ONLY when the proposal is not in local DB.
-    if alert is None:
-        loading_msg = await update.message.reply_text(
-            f"⏳ Proposal #{proposal_id} not in local cache — querying Celo network..."
-        )
-        logger.info(
-            "[GOV] DB miss for proposal #%s — attempting on-chain fallback",
-            proposal_id,
-        )
-        description_url = await get_proposal_url_onchain(proposal_id)
-
-        if not description_url:
-            await loading_msg.edit_text(
-                f"❌ Proposal #{proposal_id} not found on the Celo network."
-            )
-            logger.info(
-                "[GOV] On-chain fallback returned nothing | proposal_id=%s",
-                proposal_id,
-            )
-            return
-
-        logger.info(
-            "[GOV] On-chain fallback resolved URL | proposal_id=%s | url=%s",
-            proposal_id,
-            description_url,
-        )
-        # Ensure we always show the AI processing state while we extract + summarize.
-        await _safe_edit(loading_msg, "⏳ Analyzing proposal...")
-    else:
-        # DB hit — if the DB record exists but the URL is missing, treat it as not found.
-        if not description_url:
-            await update.message.reply_text(
-                f"❌ Proposal #{proposal_id} not found on the Celo network."
-            )
-            return
-
-        loading_msg = await update.message.reply_text("⏳ Analyzing proposal...")
-
-    # Common path — extract text and generate AI summary
-    try:
-        proposal_text = await asyncio.to_thread(
-            extract_proposal_text, description_url
-        )
-    except Exception as exc:
-        logger.warning(
-            "[GOV] Failed to extract proposal text | id=%s | url=%s | error=%s",
-            proposal_id,
-            description_url,
-            exc,
-        )
-        await _safe_edit(
-            loading_msg,
-            "❌ Could not load the proposal description. Please open the forum link instead.",
-        )
-        return
-
-    if proposal_text == FALLBACK_TEXT:
-        await _safe_edit(
-            loading_msg,
-            "Description text is unavailable for this proposal.\n\n"
-            f"Source: {description_url}",
-        )
-        return
-
-    try:
-        proposal_data = await generate_proposal_summary(proposal_text)
-    except Exception as exc:
-        logger.error(
-            "[GOV] Proposal summary generation failed | id=%s | error=%s",
-            proposal_id,
-            exc,
-        )
-        await _safe_edit(
-            loading_msg,
-            "❌ AI summary is temporarily unavailable. Please try again later.",
-        )
-        return
-
-    # Assuming proposal_data["summary"] now contains the full HTML block from the AI
-    summary = proposal_data.get("summary", "Summary unavailable.")
-
-    final_text = (
-        f"🏛️ <b>Celo Governance Proposal #{proposal_id}</b>\n"
-        f"<b>Source:</b> {description_url}\n\n"
-        f"{summary}"
-    )
-
-    try:
-        await loading_msg.edit_text(
-            text=final_text,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
-    except Exception as exc:
-        logger.warning(
-            "[GOV] Failed to send HTML summary, falling back to raw text | error: %s", exc
-        )
-        await _safe_edit(loading_msg, final_text)
+    await deliver_proposal_summary_from_anchor(update.message, proposal_id)
 
 
 async def delegate_handler(
@@ -1345,7 +1882,7 @@ async def delegate_handler(
         f"   <code>{bot_wallet}</code>\n"
         "6) Review the transaction details carefully.\n"
         "7) Sign and submit the transaction from your own wallet.\n\n"
-        "After the transaction is confirmed on-chain, Celo GovAI Hub can use your delegated "
+        "After the transaction is confirmed on-chain, GovAI Hub can use your delegated "
         "voting power to vote on Celo governance proposals based on your on-Telegram "
         "vote intents. You can revoke at any time with <code>/revoke</code>."
     )
@@ -1361,7 +1898,7 @@ async def revoke_handler(
 
     message = (
         "⏪ <b>Revoking Delegation (Full Control)</b>\n\n"
-        "You can stop Celo GovAI Hub from voting with your delegated voting power at any time. "
+        "You can stop GovAI Hub from voting with your delegated voting power at any time. "
         "<b>Revoking does not unlock or move your CELO</b> — it only changes who can vote "
         "with your locked voting power.\n\n"
         "<b>Step-by-step: revoke / change delegation on LockedGold</b>\n\n"
@@ -1378,7 +1915,7 @@ async def revoke_handler(
         "   • If the interface exposes a specific revocation method for LockedGold "
         "delegations, use it following the tool's instructions.\n"
         "5) Review the transaction details and sign it from your own wallet.\n\n"
-        "After the transaction is confirmed on-chain, Celo GovAI Hub will no longer be able to "
+        "After the transaction is confirmed on-chain, GovAI Hub will no longer be able to "
         "vote using your previously delegated voting power. If you change your mind, you "
         f"can delegate again to:\n<code>{bot_wallet}</code>\nusing <code>/delegate</code>."
     )
@@ -1411,7 +1948,7 @@ async def admin_stats_handler(
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     await update.message.reply_text(
-        "Celo GovAI Hub — Admin Stats\n"
+        "GovAI Hub — Admin Stats\n"
         f"Generated: {now_utc}\n\n"
         "Users\n"
         f"  Subscribers:   {total_subscribers}\n"
@@ -1459,7 +1996,7 @@ async def admin_broadcast_handler(
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"Celo GovAI Hub Announcement\n\n{message_text}",
+                text=f"GovAI Hub Announcement\n\n{message_text}",
             )
             ok_count += 1
         except Exception as exc:
@@ -1564,7 +2101,7 @@ async def govstatus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    preferred_network = getattr(db_user, "preferred_network", "mainnet")
+    preferred_network = effective_user_network(db_user)
     bot_wallet = Web3.to_checksum_address(get_env_or_fail("BOT_WALLET_ADDRESS"))
     expected_delegate = Web3.to_checksum_address(
         os.getenv("GOVERNANCE_DELEGATE_ADDRESS", os.getenv("BOT_WALLET_ADDRESS", bot_wallet))
@@ -1596,14 +2133,14 @@ async def govstatus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "✅ Delegation detected on-chain!\n\n"
             f"Wallet: {user_wallet}\n"
             f"Delegate: {expected_delegate}\n\n"
-            "You are now part of the Celo GovAI Hub.\n"
+            "You are now part of the GovAI Hub.\n"
             "You can start participating in on-chain votes directly from Telegram with:\n"
             "/vote <proposal_id> YES|NO|ABSTAIN"
         )
     else:
         await db.set_delegation_status(user_id, delegated=False)
         message = (
-            "⚠️ Delegation not detected to the Celo GovAI Hub agent.\n\n"
+            "⚠️ Delegation not detected to the GovAI Hub agent.\n\n"
             f"Wallet: {user_wallet}\n"
             f"Current delegate: {delegate_display}\n\n"
             "Make sure you have submitted and confirmed a delegation transaction to the bot "
@@ -1638,32 +2175,13 @@ async def vote_command_handler(
         return
 
     vote_choice = choice_raw.strip().upper()
-    if vote_choice not in {"YES", "NO", "ABSTAIN"}:
-        await update.message.reply_text(
-            "Invalid choice. Usage: /vote <proposal_id> <YES/NO/ABSTAIN>"
-        )
+    err = await register_governance_vote_intent(user_id, proposal_id, vote_choice)
+    if err:
+        await update.message.reply_text(err)
         return
-
-    user_record = await db.get_user(user_id)
-    if user_record:
-        user_record.delegated_power = True  # FIXME: TEMPORARY BYPASS FOR TESTING
-    if not user_record or not getattr(user_record, "delegated_power", False):
-        await update.message.reply_text(
-            "You need to delegate your voting power first using /delegate before casting votes."
-        )
-        return
-
-    await db.register_vote_intent(
-        user_id=user_id,
-        proposal_id=proposal_id,
-        vote_choice=vote_choice,
-    )
 
     await update.message.reply_text(
-        "✅ Your governance vote intent has been recorded.\n\n"
-        f"Proposal: {proposal_id}\n"
-        f"Choice: {vote_choice}\n\n"
-        "The vote will be executed on-chain soon by the BOTWALLET according to the governance schedule."
+        format_vote_recorded_message(proposal_id, vote_choice)
     )
 
 
@@ -1745,12 +2263,12 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         source = item.get("source", item.get("source_app", "Unknown"))
         published = item.get("published", "")
 
-        body = f"<b>{title}</b>\n"
+        body = f"<b>{hesc(title)}</b>\n"
         if published:
-            body += f"🕐 {published}\n"
-        body += f"📌 {source}\n"
+            body += f"🕐 {hesc(published)}\n"
+        body += f"📌 {hesc(source)}\n"
         if url:
-            body += f"\n🔗 <a href='{url}'>Read more</a>"
+            body += f"\n🔗 <a href='{hesc(url)}'>Read more</a>"
 
         results.append(
             InlineQueryResultArticle(
@@ -1767,6 +2285,84 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.inline_query.answer(results, cache_time=30)
     logger.info("[INLINE] query='%s' | results=%d", query_text, len(results))
+
+
+async def build_earnings_dashboard_html(user_id: int) -> str:
+    """Build HTML for the referral rewards dashboard (P-ECO.3 / P-ECO.5).
+
+    When the user has no wallet and no referrals, shows the P-Teste empty copy
+    (scenario 9). Otherwise shows numeric counters (zeros included) to motivate growth.
+
+    Args:
+        user_id: Telegram user id.
+
+    Returns:
+        HTML string for ParseMode.HTML.
+    """
+    stats = await db.get_referral_stats(user_id)
+    referral_count = stats.get("referral_count", 0)
+    swap_count = stats.get("total_swap_count", 0)
+    gov_points = stats.get("gov_points", 0)
+    earned_usdm = stats.get("total_earned_usdm", "0")
+
+    user = await db.get_user(user_id)
+    wallet = (user.user_wallet or user.wallet_address) if user else None
+
+    if wallet:
+        wallet_line = (
+            "💼 <b>Wallet:</b> <code>{0}</code>".format(hesc(truncate_wallet(wallet)))
+        )
+    else:
+        wallet_line = (
+            "⚠️ <i>Wallet not registered. Send your EVM address (0x…) "
+            "to link rewards to your account.</i>"
+        )
+
+    if not wallet and referral_count == 0:
+        body = "<i>No referrals yet. Share a proposal to start earning.</i>"
+        return (
+            f"💰 <b>Your GovAI Hub Earnings</b>\n\n"
+            f"{body}\n\n"
+            f"{wallet_line}\n\n"
+            f"<i>Rewards distributed weekly to your\n"
+            f"registered wallet via DAO Treasury.</i>"
+        )
+
+    body = (
+        f"👥 <b>Referrals:</b> {referral_count} voters brought\n"
+        f"🗳️ <b>Actions generated:</b> {swap_count}\n"
+        f"⭐ <b>GovPoints:</b> {gov_points}\n"
+        f"💵 <b>USDm earned:</b> {hesc(str(earned_usdm))}"
+    )
+
+    zero_tip = ""
+    if referral_count == 0:
+        zero_tip = (
+            "\n\n<i>Share a proposal from Governance to invite voters and "
+            "grow these numbers.</i>"
+        )
+
+    return (
+        f"💰 <b>Your GovAI Hub Earnings</b>\n\n"
+        f"{body}"
+        f"{zero_tip}\n\n"
+        f"{wallet_line}\n\n"
+        f"<i>Rewards distributed weekly to your\n"
+        f"registered wallet via DAO Treasury.</i>"
+    )
+
+
+async def earnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /earnings command — show referral rewards dashboard."""
+    user_id = update.effective_user.id
+    text = await build_earnings_dashboard_html(user_id)
+
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=get_earnings_dashboard_keyboard(),
+    )
 
 
 # ── CommandHandler exports ─────────────────────────────────────────────────────

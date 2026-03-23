@@ -8,8 +8,27 @@ from __future__ import annotations
 import logging
 
 from src.database.models import APPS_AVAILABLE
+from src.utils.config_loader import CONFIG
 
 logger = logging.getLogger(__name__)
+
+
+def get_max_items_per_category() -> int:
+    """Cap items per category from config (default 5, max 20)."""
+    raw = CONFIG.get("digest", {}).get("max_items_per_category", 5)
+    try:
+        return max(1, min(int(raw), 20))
+    except (TypeError, ValueError):
+        return 5
+
+
+def get_max_context_tokens() -> int:
+    """Token budget for digest context before market snapshot (from config)."""
+    raw = CONFIG.get("digest", {}).get("max_context_tokens", 4000)
+    try:
+        return max(500, min(int(raw), 8000))
+    except (TypeError, ValueError):
+        return 4000
 
 CATEGORY_LABELS: dict[str, str] = {
     "network": "🧱 Celo Network & Infra",
@@ -32,8 +51,6 @@ CATEGORY_PRIORITY: list[str] = [
     "nfts",
 ]
 
-MAX_ITEMS_PER_CATEGORY: int = 3
-MAX_CONTEXT_TOKENS: int = 3000
 CHARS_PER_TOKEN: float = 4.0
 
 
@@ -96,7 +113,7 @@ class DigestBuilder:
                 continue
             if app not in enabled_apps:
                 continue
-            if len(sections[cat]) >= MAX_ITEMS_PER_CATEGORY:
+            if len(sections[cat]) >= get_max_items_per_category():
                 continue
             line = (
                 f"-  {item['title'].strip()} ({item['source']}) — {item['url']}"
@@ -120,7 +137,7 @@ class DigestBuilder:
 
         for part in parts:
             part_tokens = _estimate_tokens(part)
-            if running_tokens + part_tokens > MAX_CONTEXT_TOKENS:
+            if running_tokens + part_tokens > get_max_context_tokens():
                 logger.debug(
                     "[DIGEST] Token limit reached — dropping remaining sections"
                 )
@@ -187,7 +204,7 @@ class DigestBuilder:
                 continue
             if app not in enabled_apps:
                 continue
-            if len(sections_dict[cat]) >= MAX_ITEMS_PER_CATEGORY:
+            if len(sections_dict[cat]) >= get_max_items_per_category():
                 continue
             sections_dict[cat].append({
                 "title": (item.get("title") or "").strip(),

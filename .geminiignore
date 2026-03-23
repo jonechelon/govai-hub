@@ -1,0 +1,41 @@
+# Ambientes Virtuais e Dependências
+venv/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+
+# Dados e Logs Temporários
+data/
+*.db
+*.log
+*.sqlite
+*.sqlite3
+
+# Segurança (Essencial)
+.env
+*.pem
+*.key
+*.cert
+
+# Configurações de outras IAs
+.claude/
+.cursor/
+.cursorrules
+
+# Git e Cache de Testes
+.git/
+.pytest_cache/
+.coverage
+.tox/
+
+# IDEs e Arquivos de Sistema
+.vscode/
+.idea/
+.DS_Store
+*.code-workspace
+
+# Build de Python
+build/
+dist/
+*.egg-info/

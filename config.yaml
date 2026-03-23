@@ -162,8 +162,12 @@ apps_available:
     - celo_reserve
 
 digest:
-  max_items_per_category: 3
-  max_context_tokens: 3000
+  # More items per category → up to max_daily_source_links in AI Trade Daily Sources
+  max_items_per_category: 5
+  max_context_tokens: 4000
+  # Headlines longer than this (chars) get shortened via one Groq batch call per digest
+  title_char_threshold: 120
+  max_daily_source_links: 15
   category_priority:
     - network
     - payments
@@ -205,5 +209,5 @@ erc8004:
   # identity_registry: "0x8004A818BFB912233c491871b3d84c89A494BD9e"
   agent_name: "Celo GovAI Hub"
   agent_description: "AI-powered Telegram bot delivering daily Celo blockchain digests. Monitors MiniPay, Valora, Ubeswap, Mento, ImpactMarket and more. Premium subscriptions paid in CELO"
-  agent_endpoint: "https://t.me/CeloGovAI_bot"
+  agent_endpoint: "https://t.me/GovAIHub_bot"
   chain_id: 42220

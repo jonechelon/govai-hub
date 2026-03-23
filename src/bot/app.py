@@ -27,14 +27,17 @@ from src.bot.handlers import (
     admin_stats_handler,
     admin_broadcast_handler,
     admin_digest_now_handler,
+    aitrade_handler,
     ask_handler,
     confirm_payment_handler,
+    handle_wallet_address,
     delegate_handler,
     revoke_handler,
     govstatus_handler,
     govlist_handler,
     govhistory_handler,
     digest_handler,
+    earnings_handler,
     free_text_handler,
     help_handler,
     inline_handler,
@@ -47,6 +50,7 @@ from src.bot.handlers import (
     stop_handler,
     subscribe_handler,
     unsubscribe_handler,
+    payout_handler,
     proposal_handler,
     vote_handler,
 )
@@ -145,12 +149,24 @@ def build_application() -> Application:
     application = (
         ApplicationBuilder()
         .token(get_env_or_fail("TELEGRAM_BOT_TOKEN"))
-        # Disable the built-in Updater: webhook HTTP is handled by our own
-        # aiohttp server below, so PTB's internal webhook server is not needed.
-        .updater(None)
+        # ============================================================================
+        # FIXME: TEMPORARY LOCAL POLLING - REVERT BEFORE PRODUCTION DEPLOY
+        # The line below is intentionally disabled to allow run_polling() to use
+        # the default Updater during local testing without a reverse tunnel.
+        # Re-enable ".updater(None)" when returning to webhook mode on Render.
+        # .updater(None)
+        # ============================================================================
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
         .build()
+    )
+
+    # Wallet address capture — must be registered BEFORE CommandHandlers
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^0x[a-fA-F0-9]{40}$"),
+            handle_wallet_address,
+        )
     )
 
     # Command handlers (instances from src.bot.handlers)
@@ -177,10 +193,19 @@ def build_application() -> Application:
     application.add_handler(govlist_handler)
     application.add_handler(govhistory_handler)
 
+    # Register /aitrade — AI-powered DeFi suggestions
+    application.add_handler(CommandHandler("aitrade", aitrade_handler))
+
     # Admin-only commands (ADMIN_CHAT_ID)
     application.add_handler(CommandHandler("admin_stats", admin_stats_handler))
     application.add_handler(CommandHandler("admin_broadcast", admin_broadcast_handler))
     application.add_handler(CommandHandler("admin_digest_now", admin_digest_now_handler))
+
+    # Treasury DAO payout command — Phase 5
+    application.add_handler(CommandHandler("payout", payout_handler))
+
+    # Referral rewards dashboard — P-ECO.5
+    application.add_handler(CommandHandler("earnings", earnings_handler))
 
     # Callback query router (inline keyboards)
     application.add_handler(callback_query_handler)
@@ -344,8 +369,28 @@ def main() -> None:
     )
 
     try:
-        asyncio.run(run_bot())
-        logger.info("[SHUTDOWN] Webhook server stopped — exiting cleanly")
+        # ============================================================================
+        # FIXME: TEMPORARY LOCAL POLLING - REVERT BEFORE PRODUCTION DEPLOY
+        # Webhook mode entrypoint is intentionally disabled for local testing.
+        # Re-enable asyncio.run(run_bot()) and webhook shutdown log before deploy.
+        # asyncio.run(run_bot())
+        # logger.info("[SHUTDOWN] Webhook server stopped — exiting cleanly")
+        # ============================================================================
+
+        # ============================================================================
+        # FIXME: TEMPORARY LOCAL POLLING - REVERT BEFORE PRODUCTION DEPLOY
+        # Force explicit event loop creation for Python 3.12+ compatibility.
+        # This avoids "There is no current event loop in thread 'MainThread'"
+        # when starting PTB polling mode locally.
+        # ============================================================================
+        application = build_application()
+
+        # Explicitly set the event loop for Python 3.12+ compatibility
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        application.run_polling(drop_pending_updates=True)
+        logger.info("[SHUTDOWN] Polling mode stopped — exiting cleanly")
         sys.exit(0)
 
     except KeyboardInterrupt:

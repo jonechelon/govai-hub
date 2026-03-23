@@ -15,6 +15,7 @@ from telegram.helpers import escape_markdown
 from src.ai.digest_generator import digest_generator
 from src.ai.groq_client import generate_proposal_summary
 from src.bot.keyboards import get_digest_keyboard
+from src.utils.digest_links import extract_links_from_digest
 from src.database.manager import DatabaseManager, db
 from src.database.models import GovernanceAlert
 from src.utils.health_check import set_last_digest_at
@@ -174,7 +175,8 @@ class Notifier:
                 await db.get_user_apps_by_category(user_id)
             except Exception:
                 pass
-            keyboard = get_digest_keyboard(digest_id)
+            link_count = len(await extract_links_from_digest(digest_id))
+            keyboard = get_digest_keyboard(digest_id, link_count)
 
             sent = await self._send_to_user(bot, user_id, digest_text, keyboard)
             if sent:
@@ -220,9 +222,7 @@ class Notifier:
         ai_summary_safe = ""
         try:
             if alert.description_url:
-                proposal_text = await asyncio.to_thread(
-                    extract_proposal_text, alert.description_url
-                )
+                proposal_text = await extract_proposal_text(alert.description_url)
                 if proposal_text and proposal_text != FALLBACK_TEXT:
                     proposal_data = await generate_proposal_summary(proposal_text)
                     ai_summary_safe = escape_markdown(

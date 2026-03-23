@@ -9,6 +9,7 @@ import os
 import re
 import ssl
 from datetime import datetime
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from decimal import Decimal
 from typing import Optional
 
@@ -37,8 +38,24 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 _raw_url = os.getenv("DATABASE_URL", "")
 
 if _raw_url:
-    # Remove sslmode query param — asyncpg uses ssl= kwarg instead
-    _clean_url = re.sub(r"[?&]sslmode=\w+", "", _raw_url)
+    # Drop sslmode / channel_binding — asyncpg uses connect_args ssl= instead.
+    # Regex-only stripping can leave "&channel_binding=..." glued to the DB path.
+    _parsed = urlparse(_raw_url)
+    _filtered_query = [
+        (k, v)
+        for k, v in parse_qsl(_parsed.query, keep_blank_values=True)
+        if k not in ("sslmode", "channel_binding")
+    ]
+    _clean_url = urlunparse(
+        (
+            _parsed.scheme,
+            _parsed.netloc,
+            _parsed.path,
+            _parsed.params,
+            urlencode(_filtered_query),
+            _parsed.fragment,
+        )
+    )
     # Force asyncpg driver
     _clean_url = re.sub(r"^postgres(ql)?://", "postgresql+asyncpg://", _clean_url)
 
@@ -146,6 +163,13 @@ class User(Base):
         Boolean,
         default=True,
         server_default="1",
+        nullable=False,
+    )
+    # Phase 7 — Celo chain target (mainnet / alfajores / sepolia); see also preferred_network
+    network: Mapped[str] = mapped_column(
+        String(32),
+        default="mainnet",
+        server_default="mainnet",
         nullable=False,
     )
     wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True, unique=True)
@@ -300,10 +324,129 @@ async def init_db() -> None:
     # Each statement runs in its own transaction so that a failure (column already exists)
     # triggers a clean ROLLBACK without aborting subsequent migrations.
     # PostgreSQL raises ProgrammingError; SQLite raises OperationalError.
-    _MIGRATIONS = [
+    _MIGRATIONS_ALTER = [
         "ALTER TABLE governance_alerts ADD COLUMN deposit_cusd FLOAT;",
         "ALTER TABLE users ADD COLUMN preferred_network VARCHAR DEFAULT 'mainnet';",
         "ALTER TABLE users ADD COLUMN notifications_enabled BOOLEAN DEFAULT true;",
+    ]
+    # CREATE TABLE DDL is dialect-specific (Neon/PostgreSQL vs local SQLite).
+    _MIGRATIONS_CREATE_POSTGRESQL = [
+        """
+    CREATE TABLE IF NOT EXISTS auto_trades (
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        proposal_id BIGINT NOT NULL,
+        intent_json TEXT NOT NULL,
+        executed BOOLEAN DEFAULT false,
+        notified INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+        """
+    CREATE TABLE IF NOT EXISTS ai_trade_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        session_id TEXT NOT NULL UNIQUE,
+        suggestions_json TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+        """
+    CREATE TABLE IF NOT EXISTS payout_requests (
+        id            BIGSERIAL PRIMARY KEY,
+        chat_id       BIGINT  NOT NULL,
+        message_id    BIGINT,
+        requester_id  BIGINT  NOT NULL,
+        recipient_username TEXT NOT NULL,
+        recipient_wallet   TEXT,
+        amount        TEXT    NOT NULL,
+        token         TEXT    NOT NULL DEFAULT 'CELO',
+        approvals_json TEXT   NOT NULL DEFAULT '[]',
+        status        TEXT    NOT NULL DEFAULT 'pending',
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at    TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
+    )
+    """,
+    ]
+    _MIGRATIONS_CREATE_SQLITE = [
+        """
+    CREATE TABLE IF NOT EXISTS auto_trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id BIGINT NOT NULL,
+        proposal_id BIGINT NOT NULL,
+        intent_json TEXT NOT NULL,
+        executed BOOLEAN DEFAULT false,
+        notified INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+        """
+    CREATE TABLE IF NOT EXISTS ai_trade_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id BIGINT NOT NULL,
+        session_id TEXT NOT NULL UNIQUE,
+        suggestions_json TEXT NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+        """
+    CREATE TABLE IF NOT EXISTS payout_requests (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id       BIGINT  NOT NULL,
+        message_id    BIGINT,
+        requester_id  BIGINT  NOT NULL,
+        recipient_username TEXT NOT NULL,
+        recipient_wallet   TEXT,
+        amount        TEXT    NOT NULL,
+        token         TEXT    NOT NULL DEFAULT 'CELO',
+        approvals_json TEXT   NOT NULL DEFAULT '[]',
+        status        TEXT    NOT NULL DEFAULT 'pending',
+        created_at    TEXT    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        expires_at    TEXT    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+24 hours'))
+    )
+    """,
+    ]
+    _backend = engine.url.get_backend_name()
+    # P-ECO.2: Referral economy — referrals table (dialect-specific CREATE, shared ALTERs below)
+    _eco_referrals_create_postgresql = """
+    CREATE TABLE IF NOT EXISTS referrals (
+        id             BIGSERIAL PRIMARY KEY,
+        referrer_id    BIGINT  NOT NULL,
+        referee_id     BIGINT  NOT NULL UNIQUE,
+        proposal_id    BIGINT  NOT NULL,
+        joined_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        first_action_at TIMESTAMPTZ,
+        swap_count     INTEGER DEFAULT 0,
+        earned_usdm    TEXT    DEFAULT '0'
+    )
+    """
+    _eco_referrals_create_sqlite = """
+    CREATE TABLE IF NOT EXISTS referrals (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        referrer_id    BIGINT  NOT NULL,
+        referee_id     BIGINT  NOT NULL UNIQUE,
+        proposal_id    BIGINT  NOT NULL,
+        joined_at      TEXT    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        first_action_at TEXT,
+        swap_count     INTEGER DEFAULT 0,
+        earned_usdm    TEXT    DEFAULT '0'
+    )
+    """
+    _MIGRATIONS = _MIGRATIONS_ALTER + (
+        _MIGRATIONS_CREATE_POSTGRESQL
+        if _backend == "postgresql"
+        else _MIGRATIONS_CREATE_SQLITE
+    ) + [
+        # Phase 7 — add network column to users table (mainnet / alfajores / sepolia)
+        "ALTER TABLE users ADD COLUMN network TEXT NOT NULL DEFAULT 'mainnet'",
+        # P-ECO.2: Referral economy schema
+        (
+            _eco_referrals_create_postgresql
+            if _backend == "postgresql"
+            else _eco_referrals_create_sqlite
+        ),
+        "ALTER TABLE users ADD COLUMN referred_by BIGINT",
+        "ALTER TABLE users ADD COLUMN gov_points INTEGER DEFAULT 0",
     ]
     for statement in _MIGRATIONS:
         try:

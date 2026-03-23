@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -395,6 +394,60 @@ async def get_historical_proposals_onchain(w3: Web3, contract_address: str) -> l
     return concluded_ids[:40]
 
 
+def _get_proposal_approved_sync(
+    w3: Web3, contract_address: str, proposal_id: int
+) -> bool | None:
+    """Return approved flag from getProposal, or None on revert/error."""
+    try:
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=GOVERNANCE_ABI_MINIMAL,
+        )
+        result = contract.functions.getProposal(int(proposal_id)).call()
+        return bool(result[6])
+    except ContractLogicError:
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "[GOVERNANCE] getProposal failed | proposal_id=%s | error=%s",
+            proposal_id,
+            exc,
+        )
+        return None
+
+
+def resolve_proposal_status_key_sync(
+    w3: Web3, contract_address: str, proposal_id: int
+) -> str:
+    """Map on-chain stage (+ approved) to UX status keys for emoji display.
+
+    Returns one of: ACTIVE, EXPIRED, EXECUTED, REJECTED, UNKNOWN.
+    Stage 4 is treated as Expiration (terminal) per local governance UX notes.
+    """
+    stage = _get_proposal_stage_sync(w3, contract_address, proposal_id)
+    if stage is None:
+        return "UNKNOWN"
+    if stage in {1, 2, 3}:
+        return "ACTIVE"
+    if stage == 4:
+        return "EXPIRED"
+    approved = _get_proposal_approved_sync(w3, contract_address, proposal_id)
+    if approved is True:
+        return "EXECUTED"
+    if approved is False:
+        return "REJECTED"
+    return "UNKNOWN"
+
+
+async def resolve_proposal_status_key(
+    w3: Web3, contract_address: str, proposal_id: int
+) -> str:
+    """Async wrapper for :func:`resolve_proposal_status_key_sync`."""
+    return await asyncio.to_thread(
+        resolve_proposal_status_key_sync, w3, contract_address, proposal_id
+    )
+
+
 class GovernanceFetcher:
     """Fetches new governance proposals from the Celo Governance contract."""
 
@@ -421,13 +474,10 @@ class GovernanceFetcher:
             else None
         )
 
-    def fetch_new_proposals(
+    async def fetch_new_proposals(
         self, last_processed_block: int | None = None
     ) -> tuple[list[dict], int | None]:
         """Fetch newly queued governance proposals from Celo.
-
-        This method is synchronous; callers must run it via asyncio.to_thread
-        when calling from an async context to avoid blocking the event loop.
 
         Args:
             last_processed_block: Last block number already processed (stored in DB).
@@ -441,7 +491,7 @@ class GovernanceFetcher:
         """
         try:
             w3 = self._w3_primary
-            current_block = self._get_current_block_with_retry(w3)
+            current_block = await self._get_current_block_with_retry(w3)
             if current_block is None or current_block <= 0:
                 return [], None
 
@@ -454,7 +504,7 @@ class GovernanceFetcher:
                 address=GOVERNANCE_ADDRESS, abi=GOVERNANCE_ABI_MINIMAL
             )
 
-            events = self._get_proposal_events_with_retry(
+            events = await self._get_proposal_events_with_retry(
                 contract, start_block, "latest"
             )
             proposals = [self._event_to_dict(e) for e in events]
@@ -476,7 +526,7 @@ class GovernanceFetcher:
 
         return [], None
 
-    def _get_current_block_with_retry(self, w3: Web3) -> int | None:
+    async def _get_current_block_with_retry(self, w3: Web3) -> int | None:
         """Get current block number with retry and fallback provider."""
         for attempt, delay in enumerate(RETRY_DELAYS, start=1):
             try:
@@ -487,7 +537,7 @@ class GovernanceFetcher:
                 )
                 if attempt >= len(RETRY_DELAYS):
                     break
-                time.sleep(delay)
+                await asyncio.sleep(delay)
                 if attempt >= 1 and self._w3_fallback is not None:
                     w3 = self._w3_fallback
                     logger.warning(
@@ -495,7 +545,7 @@ class GovernanceFetcher:
                     )
         return None
 
-    def _get_proposal_events_with_retry(
+    async def _get_proposal_events_with_retry(
         self,
         contract: Any,
         from_block: int,
@@ -521,7 +571,7 @@ class GovernanceFetcher:
                 )
                 if attempt >= len(RETRY_DELAYS):
                     break
-                time.sleep(delay)
+                await asyncio.sleep(delay)
                 if attempt >= 2 and self._w3_fallback is not None:
                     w3 = self._w3_fallback
                     logger.warning(

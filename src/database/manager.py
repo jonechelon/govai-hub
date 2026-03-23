@@ -27,15 +27,19 @@ COMMIT;
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.utils.user_network import effective_user_network
 
 from src.database.models import (
     APPS_AVAILABLE,
     AsyncSessionLocal,
+    engine,
     DigestLog,
     FetcherLog,
     GovernanceVote,
@@ -136,31 +140,43 @@ class DatabaseManager:
                 user.subscribed = subscribed
         logger.info("[DB] User %s subscription updated: %s", user_id, subscribed)
 
-    # ─── set_preferred_network ───────────────────────────────────────────────
+    # ─── set_preferred_network / set_chain_network ───────────────────────────
 
-    async def set_preferred_network(self, user_id: int, preferred_network: str) -> None:
-        """Set user's governance network preference.
+    async def set_chain_network(self, user_id: int, network: str) -> None:
+        """Set both ``network`` and ``preferred_network`` to the same canonical value.
 
         Args:
-            user_id: Telegram user_id.
-            preferred_network: "mainnet" | "alfajores".
+            user_id: Telegram user id.
+            network: ``mainnet`` | ``alfajores`` | ``sepolia``.
         """
-        normalized = preferred_network.strip().lower()
-        if normalized not in {"mainnet", "alfajores"}:
-            raise ValueError(f"Invalid preferred_network: {preferred_network!r}")
-
+        valid = {"mainnet", "alfajores", "sepolia"}
+        normalized = network.strip().lower()
+        if normalized not in valid:
+            raise ValueError(
+                f"Invalid chain network: {network!r}. Must be one of: {valid}"
+            )
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 await session.execute(
                     update(User)
                     .where(User.user_id == user_id)
-                    .values(preferred_network=normalized)
+                    .values(network=normalized, preferred_network=normalized)
                 )
         logger.info(
-            "[DB] preferred_network updated | user=%s | network=%s",
+            "[DB] chain network updated | user=%s | network=%s",
             user_id,
             normalized,
         )
+
+    async def set_preferred_network(self, user_id: int, preferred_network: str) -> None:
+        """Set user's governance network preference (mainnet | alfajores).
+
+        Updates both ORM columns via :meth:`set_chain_network` for consistency.
+        """
+        normalized = preferred_network.strip().lower()
+        if normalized not in {"mainnet", "alfajores"}:
+            raise ValueError(f"Invalid preferred_network: {preferred_network!r}")
+        await self.set_chain_network(user_id, normalized)
 
     # ─── toggle_notifications_enabled ────────────────────────────────────────
 
@@ -710,6 +726,19 @@ class DatabaseManager:
                 else:
                     existing.vote_choice = normalized_choice
 
+    async def list_user_governance_votes(
+        self, user_id: int, limit: int = 40
+    ) -> list[GovernanceVote]:
+        """Return the user's governance vote intents, newest first."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GovernanceVote)
+                    .where(GovernanceVote.user_id == user_id)
+                    .order_by(GovernanceVote.created_at.desc())
+                    .limit(limit)
+                )
+                return list(result.scalars().all())
 
     async def get_pending_votes_aggregated(self) -> list[dict]:
         """Aggregate pending governance votes by proposal and compute majority choice.
@@ -829,6 +858,495 @@ class DatabaseManager:
                     row.value = value
                 else:
                     session.add(SystemState(key=key, value=value))
+
+    async def save_ai_session(
+        self,
+        user_id: int,
+        session_id: str,
+        suggestions: list[dict],
+    ) -> None:
+        """Persist AI trade suggestions to ai_trade_sessions table.
+
+        suggestions is serialized to JSON text for storage.
+
+        Args:
+            user_id: Telegram user id.
+            session_id: Short unique session id (e.g. 8-char prefix).
+            suggestions: Parsed suggestion dicts from parse_ai_suggestions.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        "INSERT INTO ai_trade_sessions (user_id, session_id, suggestions_json) "
+                        "VALUES (:user_id, :session_id, :suggestions_json) "
+                        "ON CONFLICT (session_id) DO NOTHING"
+                    ),
+                    {
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "suggestions_json": json.dumps(suggestions),
+                    },
+                )
+
+    async def get_ai_session(self, session_id: str) -> list[dict] | None:
+        """Retrieve AI suggestions for a session_id if created within the last 24 hours.
+
+        Returns:
+            Parsed suggestions list, or None if not found or TTL expired.
+        """
+        backend = engine.url.get_backend_name()
+        if backend == "postgresql":
+            ttl_clause = "created_at > NOW() - INTERVAL '24 hours'"
+        else:
+            # SQLite (local dev): compare stored timestamps
+            ttl_clause = "datetime(created_at) > datetime('now', '-24 hours')"
+
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        "SELECT suggestions_json FROM ai_trade_sessions "
+                        "WHERE session_id = :session_id "
+                        f"AND {ttl_clause}"
+                    ),
+                    {"session_id": session_id},
+                )
+                row = result.fetchone()
+                if not row:
+                    return None
+                return json.loads(row[0])
+
+    async def save_auto_trade(
+        self,
+        user_id: int,
+        proposal_id: int,
+        intent_json: dict,
+    ) -> int:
+        """Persist a pending auto-trade intent linked to a governance proposal.
+
+        Args:
+            user_id: Telegram user id.
+            proposal_id: On-chain governance proposal id.
+            intent_json: Intent payload (serialized to JSON).
+
+        Returns:
+            The new row id.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        "INSERT INTO auto_trades (user_id, proposal_id, intent_json) "
+                        "VALUES (:user_id, :proposal_id, :intent_json) "
+                        "RETURNING id"
+                    ),
+                    {
+                        "user_id": user_id,
+                        "proposal_id": proposal_id,
+                        "intent_json": json.dumps(intent_json),
+                    },
+                )
+                row = result.fetchone()
+                if row is None:
+                    raise RuntimeError("auto_trades insert returned no id")
+                return int(row[0])
+
+    async def get_proposal_ids_with_pending_auto_trades(self) -> list[int]:
+        """Return distinct proposal IDs that have pending auto-trade notifications."""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT DISTINCT proposal_id FROM auto_trades "
+                    "WHERE executed = false AND notified = 0"
+                ),
+            )
+            return [int(r[0]) for r in result.fetchall()]
+
+    async def get_pending_auto_trades(self, proposal_id: int) -> list[dict]:
+        """
+        Returns all auto_trades with executed=false and notified=0
+        for the given proposal_id.
+        """
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT id, user_id, intent_json FROM auto_trades "
+                    "WHERE proposal_id = :proposal_id "
+                    "AND executed = false "
+                    "AND notified = 0"
+                ),
+                {"proposal_id": proposal_id},
+            )
+            rows = result.mappings().all()
+            return [dict(row) for row in rows]
+
+    async def mark_auto_trade_notified(self, trade_id: int) -> None:
+        """
+        Sets notified=1 for a given auto_trade row.
+        Called after successfully sending (or attempting) the Telegram notification.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text("UPDATE auto_trades SET notified = 1 WHERE id = :trade_id"),
+                    {"trade_id": trade_id},
+                )
+
+    async def get_user_pending_trades(self, user_id: int) -> list[dict]:
+        """
+        Returns all pending auto_trades for a specific user.
+
+        Pending = executed=false AND notified=0.
+        Used by gov:status to show the user their active intents.
+        """
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT id, proposal_id, intent_json, created_at "
+                    "FROM auto_trades "
+                    "WHERE user_id = :user_id "
+                    "AND executed = false "
+                    "AND notified = 0 "
+                    "ORDER BY created_at DESC"
+                ),
+                {"user_id": user_id},
+            )
+            rows = result.mappings().all()
+            return [
+                {
+                    "id": int(row["id"]),
+                    "proposal_id": int(row["proposal_id"]),
+                    "intent_json": row["intent_json"],
+                    "created_at": str(row["created_at"])
+                    if row["created_at"] is not None
+                    else "",
+                }
+                for row in rows
+            ]
+
+    async def cancel_auto_trade(self, trade_id: int, user_id: int) -> bool:
+        """
+        Cancels an auto_trade by setting executed=true.
+
+        user_id is required for ownership verification — never cancel another user's trade.
+
+        Returns:
+            True if a row was actually updated, False if not found or wrong user.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        "UPDATE auto_trades SET executed = true "
+                        "WHERE id = :trade_id AND user_id = :user_id"
+                    ),
+                    {"trade_id": trade_id, "user_id": user_id},
+                )
+                return result.rowcount > 0
+
+    async def get_user_trade_for_proposal(
+        self,
+        user_id: int,
+        proposal_id: int,
+    ) -> dict | None:
+        """Return the most recent active auto_trade for a (user_id, proposal_id) pair.
+
+        Used to prevent duplicate registrations for the same proposal.
+        Active = executed=FALSE (includes notified and un-notified).
+        Returns None if no active trade exists.
+        """
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT id, intent_json, created_at FROM auto_trades "
+                    "WHERE user_id = :user_id "
+                    "AND proposal_id = :proposal_id "
+                    "AND executed = false "
+                    "ORDER BY created_at DESC "
+                    "LIMIT 1"
+                ),
+                {"user_id": user_id, "proposal_id": proposal_id},
+            )
+            row = result.fetchone()
+            if not row:
+                return None
+            raw_intent = row[1]
+            if isinstance(raw_intent, str):
+                try:
+                    parsed_intent: dict | str = json.loads(raw_intent)
+                except json.JSONDecodeError:
+                    parsed_intent = raw_intent
+            else:
+                parsed_intent = raw_intent
+            created = row[2]
+            return {
+                "id": int(row[0]),
+                "intent_json": parsed_intent,
+                "created_at": str(created) if created is not None else "",
+            }
+
+    async def get_user_wallet_by_username(self, username: str) -> str | None:
+        """Return governance wallet (user_wallet) for a Telegram username, or None.
+
+        Matches usernames stored with or without a leading ``@`` (case-insensitive).
+        """
+        raw = username.lstrip("@")
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(User.user_wallet).where(
+                        func.lower(func.replace(User.username, "@", "")) == raw.lower(),
+                        User.user_wallet.isnot(None),
+                    ).limit(1)
+                )
+                return result.scalar_one_or_none()
+
+    async def save_payout_request(
+        self,
+        chat_id: int,
+        requester_id: int,
+        recipient_username: str,
+        recipient_wallet: str,
+        amount: str,
+        token: str = "CELO",
+    ) -> int:
+        """Insert a payout_requests row; ``expires_at`` uses the DB default (NOW + 24h).
+
+        Returns:
+            New row ``id``.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        "INSERT INTO payout_requests "
+                        "(chat_id, requester_id, recipient_username, recipient_wallet, amount, token) "
+                        "VALUES (:chat_id, :requester_id, :recipient_username, :recipient_wallet, "
+                        ":amount, :token) "
+                        "RETURNING id"
+                    ),
+                    {
+                        "chat_id": chat_id,
+                        "requester_id": requester_id,
+                        "recipient_username": recipient_username,
+                        "recipient_wallet": recipient_wallet,
+                        "amount": amount,
+                        "token": token,
+                    },
+                )
+                row = result.fetchone()
+                if row is None:
+                    raise RuntimeError("payout_requests insert returned no id")
+                return int(row[0])
+
+    async def update_payout_message_id(
+        self, payout_id: int, message_id: int
+    ) -> None:
+        """Set ``message_id`` on a payout request after the receipt is sent."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        "UPDATE payout_requests SET message_id = :message_id WHERE id = :payout_id"
+                    ),
+                    {"message_id": message_id, "payout_id": payout_id},
+                )
+
+    async def get_payout_request(self, payout_id: int) -> dict | None:
+        """Load one ``payout_requests`` row by id, or None if missing."""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT id, chat_id, message_id, requester_id, recipient_username, "
+                    "recipient_wallet, amount, token, approvals_json, status, "
+                    "created_at, expires_at FROM payout_requests WHERE id = :id"
+                ),
+                {"id": payout_id},
+            )
+            row = result.fetchone()
+            if row is None:
+                return None
+            return {
+                "id": int(row[0]),
+                "chat_id": int(row[1]),
+                "message_id": row[2],
+                "requester_id": int(row[3]),
+                "recipient_username": row[4] or "",
+                "recipient_wallet": row[5] or "",
+                "amount": row[6] or "",
+                "token": row[7] or "",
+                "approvals_json": row[8] if row[8] is not None else "[]",
+                "status": row[9] or "",
+                "created_at": row[10],
+                "expires_at": row[11],
+            }
+
+    async def add_payout_approval(self, payout_id: int, user_id: int) -> bool:
+        """Append ``user_id`` to ``approvals_json`` if pending and not already present.
+
+        Returns:
+            True if a new approval was stored, False if duplicate or not pending.
+        """
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        "SELECT approvals_json, status FROM payout_requests WHERE id = :id"
+                    ),
+                    {"id": payout_id},
+                )
+                row = result.fetchone()
+                if row is None:
+                    return False
+                approvals_json, status = row[0], row[1]
+                if (status or "") != "pending":
+                    return False
+                try:
+                    approvals: list = json.loads(approvals_json or "[]")
+                except json.JSONDecodeError:
+                    approvals = []
+                if not isinstance(approvals, list):
+                    approvals = []
+                if user_id in approvals:
+                    return False
+                approvals.append(user_id)
+                await session.execute(
+                    text(
+                        "UPDATE payout_requests SET approvals_json = :aj "
+                        "WHERE id = :id AND status = 'pending'"
+                    ),
+                    {"aj": json.dumps(approvals), "id": payout_id},
+                )
+            return True
+
+    async def set_payout_status(self, payout_id: int, status: str) -> None:
+        """Set ``status`` on a payout request (e.g. ``expired``, ``approved``)."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text("UPDATE payout_requests SET status = :st WHERE id = :id"),
+                    {"st": status, "id": payout_id},
+                )
+
+    # Phase 7 — set the preferred Celo network for a user
+
+    async def set_user_network(self, user_id: int, network: str) -> None:
+        """Persist network preference (Phase 7 API). Delegates to :meth:`set_chain_network`."""
+        await self.set_chain_network(user_id, network)
+
+    # Phase 7 — retrieve the preferred Celo network for a user (default: 'mainnet')
+
+    async def get_user_network(self, user_id: int) -> str:
+        """Return the user's effective chain network (reconciles ``network`` and legacy rows)."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(User).where(User.user_id == user_id)
+                )
+                user = result.scalar_one_or_none()
+        if not user:
+            return "mainnet"
+        return effective_user_network(user)
+
+    # ─── Referral economy (P-ECO.3) ───────────────────────────────────────────
+
+    async def set_referred_by(self, user_id: int, referrer_id: int) -> None:
+        """Write referred_by only if not already set (immutable after first write)."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE users
+                           SET referred_by = :referrer_id
+                         WHERE user_id = :user_id
+                           AND referred_by IS NULL
+                        """
+                    ),
+                    {"referrer_id": referrer_id, "user_id": user_id},
+                )
+
+    async def add_gov_points(self, user_id: int, points: int) -> None:
+        """Atomically increment gov_points for a user."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        "UPDATE users SET gov_points = COALESCE(gov_points, 0) + :points "
+                        "WHERE user_id = :user_id"
+                    ),
+                    {"points": points, "user_id": user_id},
+                )
+
+    async def create_referral(
+        self, referrer_id: int, referee_id: int, proposal_id: int
+    ) -> None:
+        """Insert referral row; silently ignore if referee already has a referral."""
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO referrals (referrer_id, referee_id, proposal_id)
+                        VALUES (:referrer_id, :referee_id, :proposal_id)
+                        ON CONFLICT (referee_id) DO NOTHING
+                        """
+                    ),
+                    {
+                        "referrer_id": referrer_id,
+                        "referee_id": referee_id,
+                        "proposal_id": proposal_id,
+                    },
+                )
+
+    async def get_referral_stats(self, user_id: int) -> dict:
+        """
+        Return referral stats for a user.
+        Keys: referral_count (int), total_swap_count (int),
+              total_earned_usdm (str), gov_points (int).
+        All keys always present; defaults to zero values on empty result.
+        """
+        backend = engine.url.get_backend_name()
+        if backend == "postgresql":
+            sql_referrals = """
+                SELECT COUNT(*) AS referral_count,
+                       COALESCE(SUM(swap_count), 0) AS total_swap_count,
+                       COALESCE(SUM(earned_usdm::numeric), 0) AS total_earned_usdm
+                  FROM referrals
+                 WHERE referrer_id = :user_id
+            """
+        else:
+            sql_referrals = """
+                SELECT COUNT(*) AS referral_count,
+                       COALESCE(SUM(swap_count), 0) AS total_swap_count,
+                       COALESCE(SUM(CAST(earned_usdm AS REAL)), 0) AS total_earned_usdm
+                  FROM referrals
+                 WHERE referrer_id = :user_id
+            """
+        sql_points = (
+            "SELECT COALESCE(gov_points, 0) AS gov_points FROM users "
+            "WHERE user_id = :user_id"
+        )
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(sql_referrals),
+                    {"user_id": user_id},
+                )
+                row = result.mappings().first()
+                result_pts = await session.execute(
+                    text(sql_points),
+                    {"user_id": user_id},
+                )
+                points_row = result_pts.mappings().first()
+
+        return {
+            "referral_count": int(row["referral_count"]) if row else 0,
+            "total_swap_count": int(row["total_swap_count"]) if row else 0,
+            "total_earned_usdm": str(row["total_earned_usdm"]) if row else "0",
+            "gov_points": int(points_row["gov_points"]) if points_row else 0,
+        }
 
 
 db = DatabaseManager()

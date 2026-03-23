@@ -7,6 +7,7 @@ import time
 
 from groq import AsyncGroq
 
+from src.ai.prompt_builder import build_ai_purchase_suggestions_prompt
 from src.utils.env_validator import get_env_or_fail
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,27 @@ class GroqClient:
 
 # Module-level singleton — imported by DigestGenerator, ask_handler, notifier
 groq_client = GroqClient()
+
+
+async def get_ai_suggestions(user_text: str) -> str:
+    """Calls the Groq API to generate 3 DeFi suggestions for the /aitrade command.
+
+    Returns raw text from Groq — parsing is handled by parse_ai_suggestions().
+    Uses the same GroqClient instance, temperature, and model fallback chain as
+    other chat completions in this module.
+
+    Args:
+        user_text: Free-form user message for suggestion generation.
+
+    Returns:
+        Raw completion text from the model.
+    """
+    prompt = build_ai_purchase_suggestions_prompt(user_text)
+    messages = [
+        {"role": "system", "content": "You are a DeFi advisor on the Celo network."},
+        {"role": "user", "content": prompt},
+    ]
+    return await groq_client.generate(messages, max_tokens=768)
 
 
 async def generate_proposal_summary(text: str) -> dict[str, str]:

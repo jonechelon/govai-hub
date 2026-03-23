@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
 from typing import Any
 
+from telegram import Bot
+from telegram.error import Forbidden
 from web3 import Web3
 from web3.contract import Contract
 
 from src.database.manager import db
-from src.fetchers.governance_fetcher import GOVERNANCE_ADDRESS
+from src.fetchers.governance_fetcher import GOVERNANCE_ABI_MINIMAL, GOVERNANCE_ADDRESS
+from src.utils.defi_links import build_venue_links
 from src.utils.env_validator import get_env_or_fail
 from src.utils.gas_manager import (
     GasPriceTooHighError,
@@ -45,6 +50,63 @@ VOTE_VALUE_MAP: dict[str, int] = {
 }
 
 
+async def _notify_auto_trades(bot: Bot, proposal_id: int, proposal_title: str) -> None:
+    """
+    Sends DeFi action links to all users with pending auto_trades for a given proposal.
+    Called when a governance proposal status changes to Executed.
+    Marks each trade as notified=1 after sending — never re-notifies.
+    """
+    try:
+        rows = await db.get_pending_auto_trades(proposal_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[AUTO_TRADE] DB fetch failed for proposal %s: %s", proposal_id, exc)
+        return
+
+    for row in rows:
+        trade_id = row["id"]
+        user_id = row["user_id"]
+        try:
+            intent = json.loads(row["intent_json"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[AUTO_TRADE] Bad intent_json for trade %s", trade_id)
+            continue
+
+        keyboard = build_venue_links(intent)
+
+        message = (
+            "🔔 <b>Auto-Trade Alert</b>\n\n"
+            f"Governance proposal <b>{proposal_title}</b> has been executed.\n\n"
+            "Your pending trade intent is ready. Open a venue to complete it "
+            "in your wallet:\n"
+            "<i>Sign in your wallet — this bot never holds your keys.</i>"
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
+            await db.mark_auto_trade_notified(trade_id)
+            logger.info("[AUTO_TRADE] Notified user %s for trade %s", user_id, trade_id)
+
+        except Forbidden:
+            logger.warning(
+                "[AUTO_TRADE] Forbidden for user %s — marking notified", user_id
+            )
+            await db.mark_auto_trade_notified(trade_id)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[AUTO_TRADE] Failed to notify user %s trade %s: %s",
+                user_id,
+                trade_id,
+                exc,
+            )
+
+
 class GovernanceExecutor:
     """Periodic job that executes aggregated governance votes on-chain.
 
@@ -72,15 +134,64 @@ class GovernanceExecutor:
             address=GOVERNANCE_ADDRESS,
             abi=GOVERNANCE_VOTE_ABI,
         )
+        self._governance_read: Contract = self._w3.eth.contract(
+            address=GOVERNANCE_ADDRESS,
+            abi=GOVERNANCE_ABI_MINIMAL,
+        )
 
     async def _run_sync(self, func, *args):
         """Run a blocking web3 call in the default executor."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, func, *args)
 
-    async def run(self) -> None:
+    def _proposal_passed_and_concluded_sync(self, proposal_id: int) -> bool:
+        """Return True when voting ended and the proposal was approved (executed)."""
+        try:
+            stage = self._governance_read.functions.getProposalStage(
+                int(proposal_id)
+            ).call()
+            stage_int = int(stage)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "[AUTO_TRADE] getProposalStage failed for proposal %s: %s",
+                proposal_id,
+                exc,
+            )
+            return False
+        if stage_int in {1, 2, 3}:
+            return False
+        try:
+            proposal = self._governance_read.functions.getProposal(
+                int(proposal_id)
+            ).call()
+            approved = bool(proposal[6])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "[AUTO_TRADE] getProposal failed for proposal %s: %s",
+                proposal_id,
+                exc,
+            )
+            return False
+        return approved
+
+    async def _notify_executed_auto_trades(self, bot: Bot) -> None:
+        """Notify users when on-chain state shows a proposal passed and concluded."""
+        proposal_ids = await db.get_proposal_ids_with_pending_auto_trades()
+        for proposal_id in proposal_ids:
+            passed = await self._run_sync(
+                self._proposal_passed_and_concluded_sync,
+                proposal_id,
+            )
+            if not passed:
+                continue
+            title = html.escape(f"Proposal #{proposal_id}")
+            await _notify_auto_trades(bot, proposal_id, title)
+
+    async def run(self, bot: Bot | None = None) -> None:
         """Entry point scheduled by APScheduler."""
         try:
+            if bot is not None:
+                await self._notify_executed_auto_trades(bot)
             await self._execute_pending_votes()
         except Exception as exc:  # noqa: BLE001
             logger.exception("[GOVERNANCE] Executor job failed: %s", exc)

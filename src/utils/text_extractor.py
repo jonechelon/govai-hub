@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
 
 from src.utils.logger import logger
@@ -71,7 +71,7 @@ def _extract_text_from_html(html: str) -> str:
     return soup.get_text(separator="\n", strip=True)
 
 
-def extract_proposal_text(url: str) -> str:
+async def extract_proposal_text(url: str) -> str:
     """Fetch and return a cleaned proposal description text.
 
     The function is designed to be resilient: on any HTTP or parsing error it logs
@@ -96,9 +96,10 @@ def extract_proposal_text(url: str) -> str:
         )
 
     try:
-        response = requests.get(normalized_url, timeout=5)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as exc:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(normalized_url)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
         logger.warning(
             "[TEXT_EXTRACTOR] Failed to fetch proposal description from URL: %s | error: %s",
             normalized_url,

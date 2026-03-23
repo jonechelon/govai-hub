@@ -283,7 +283,7 @@ async def run_test(send_to_admin: bool = False) -> None:
                     f"[TEST DIGEST — {timestamp}]\n\n"
                     f"{digest_text}"
                 ),
-                reply_markup=get_digest_keyboard(digest_id),
+                reply_markup=get_digest_keyboard(digest_id, 0),
             )
             print(f"  Sent to admin ({admin_id}) | digest_id={digest_id}")
         except Exception as exc:

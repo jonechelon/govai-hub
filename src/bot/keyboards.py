@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from src.utils.config_loader import CONFIG
+from src.utils.blockscout_fetcher import blockscout_address_explorer_url
+from src.utils.onchain_txlist_format import explorer_address_url
+
 from src.database.models import APPS_AVAILABLE
+from src.utils.user_network import network_toggle_label
 
 
 # Display metadata for each category key (must match APPS_AVAILABLE in models.py).
@@ -52,7 +57,7 @@ def get_main_keyboard(
         governance network preference and the notification toggle state.
     """
     row1 = [
-        InlineKeyboardButton("📰 Latest Digest", callback_data="digest:latest"),
+        InlineKeyboardButton("💹 AI Trade", callback_data="digest:latest"),
         InlineKeyboardButton("⚙️ Settings", callback_data="settings:open"),
     ]
     row2 = [
@@ -66,22 +71,66 @@ def get_main_keyboard(
         InlineKeyboardButton(vote_alerts_label, callback_data="notify:toggle"),
     ]
 
-    # Show the active network so users always know where they are.
-    # Tapping the button toggles to the other network via net:switch.
-    if preferred_network == "alfajores":
-        switch_label = "🍪 Alfajores"
-    else:
-        switch_label = "🟡 Mainnet"
-
+    # Show the active network — tap cycles mainnet → alfajores → sepolia (net:switch).
+    switch_label = network_toggle_label(preferred_network)
     vote_alerts_row.append(
         InlineKeyboardButton(switch_label, callback_data="net:switch")
     )
 
+    # [💎 Premium] replaced by [💰 Earnings] — Phase 9 Share & Earn preparation
+    # premium:* callbacks remain in the codebase as legacy (§17 of ui_protection.mdc)
     row4 = [
-        InlineKeyboardButton("💎 Premium", callback_data="premium:open"),
+        InlineKeyboardButton("💰 Earnings", callback_data="menu:earnings"),
         InlineKeyboardButton("❓ Help", callback_data="help:open"),
     ]
-    return InlineKeyboardMarkup([row1, row2, vote_alerts_row, row4])
+    row5 = [
+        InlineKeyboardButton("📜 On-chain activity", callback_data="menu:onchain_hub"),
+    ]
+    return InlineKeyboardMarkup([row1, row2, vote_alerts_row, row4, row5])
+
+
+def get_earnings_dashboard_keyboard() -> InlineKeyboardMarkup:
+    """Earnings dashboard: Back to main menu (same for /earnings and menu:earnings)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Back", callback_data="menu:main")],
+    ])
+
+
+def get_onchain_hub_keyboard() -> InlineKeyboardMarkup:
+    """On-chain hub: tx history by scope (not governance:open / not digest:latest)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 All activity", callback_data="onchain:txlist:all"),
+            InlineKeyboardButton("🏛️ Governance", callback_data="onchain:txlist:governance"),
+            InlineKeyboardButton("💹 AI Trade", callback_data="onchain:txlist:aitrade"),
+        ],
+        [InlineKeyboardButton("⬅️ Back", callback_data="menu:main")],
+    ])
+
+
+def get_onchain_txlist_keyboard(
+    wallet: str | None = None,
+    network: str | None = None,
+) -> InlineKeyboardMarkup:
+    """Full-history URL (own row) + Back to on-chain hub (§4 — no url+callback same row)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if wallet:
+        n = (network or "mainnet").strip().lower()
+        if n == "sepolia":
+            explorer_url = explorer_address_url(wallet, network)
+        else:
+            explorer_url = blockscout_address_explorer_url(wallet, network)
+        if explorer_url.startswith("https://"):
+            rows.append([
+                InlineKeyboardButton(
+                    "🔗 Full history on explorer",
+                    url=explorer_url,
+                ),
+            ])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="menu:onchain_hub"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def get_help_keyboard() -> InlineKeyboardMarkup:
@@ -97,35 +146,66 @@ def get_help_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def get_digest_keyboard(digest_id: str) -> InlineKeyboardMarkup:
-    """Build the keyboard attached to a digest message."""
-    row1 = [
-        InlineKeyboardButton("📰 Details", callback_data=f"details:{digest_id}"),
-        InlineKeyboardButton("🔗 Links", callback_data=f"links:{digest_id}"),
-    ]
-    row2 = [
-        InlineKeyboardButton("🤖 Ask AI", callback_data=f"ask:{digest_id}"),
-        InlineKeyboardButton("⚙️ Settings", callback_data="settings:open"),
-    ]
-    row3 = [
-        InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu:main"),
-    ]
-    return InlineKeyboardMarkup([row1, row2, row3])
+def _max_digest_keyboard_buttons() -> int:
+    """Align with ``digest.max_daily_source_links`` in config (cap 25)."""
+    raw = CONFIG.get("digest", {}).get("max_daily_source_links", 15)
+    try:
+        return max(1, min(int(raw), 25))
+    except (TypeError, ValueError):
+        return 15
+
+
+def get_digest_keyboard(digest_id: str, link_count: int = 0) -> InlineKeyboardMarkup:
+    """Build the keyboard for the AI Trade digest view (numbered sources + Back).
+
+    Args:
+        digest_id: Cached digest id for callbacks.
+        link_count: Number of source rows. Only ``1..link_count`` buttons are shown
+            (capped by ``max_daily_source_links``).
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+
+    rows.append([
+        InlineKeyboardButton(
+            "💹 AI Trade C-Sources",
+            callback_data="noop:aitrade:header",
+        ),
+    ])
+
+    cap = _max_digest_keyboard_buttons()
+    n = max(0, min(int(link_count), cap))
+    buttons: list[InlineKeyboardButton] = []
+    for i in range(1, n + 1):
+        buttons.append(
+            InlineKeyboardButton(
+                str(i),
+                callback_data=f"digest:link:{digest_id}:{i}",
+            )
+        )
+        if len(buttons) == 5:
+            rows.append(buttons)
+            buttons = []
+    if buttons:
+        rows.append(buttons)
+
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="menu:main"),
+    ])
+
+    return InlineKeyboardMarkup(rows)
 
 
 def get_wallet_keyboard(user_network: str = "mainnet") -> InlineKeyboardMarkup:
     """Return the keyboard for the Wallet menu."""
-    network_btn_text = "🍪 Alfajores" if user_network == "alfajores" else "🟡 Mainnet"
+    network_btn_text = network_toggle_label(user_network)
     keyboard = [
         [
-            InlineKeyboardButton("⭐️ Premium", callback_data="menu:premium"),
+            # Replace legacy Premium button with Earnings in setwallet keyboard
+            InlineKeyboardButton("💰 Earnings", callback_data="menu:earnings"),
             InlineKeyboardButton("🔍 Gov Status", callback_data="gov:status"),
         ],
         [
-            InlineKeyboardButton(
-                f"{network_btn_text} Network",
-                callback_data="net:switch",
-            )
+            InlineKeyboardButton(network_btn_text, callback_data="net:switch"),
         ],
         [
             InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu:main"),
@@ -206,24 +286,18 @@ def get_settings_keyboard(
         ]
     )
 
-    # Show the active network so users always know where they are.
-    # Tapping the button toggles to the other network via net:switch.
-    if preferred_network == "alfajores":
-        switch_label = "🍪 Alfajores"
-    else:
-        switch_label = "🟡 Mainnet"
-
-    rows.append(
-        [
-            InlineKeyboardButton(switch_label, callback_data="net:switch"),
-        ]
-    )
+    # Active network — tap cycles mainnet → alfajores → sepolia (callback net:switch).
+    switch_label = network_toggle_label(preferred_network)
+    rows.append([
+        InlineKeyboardButton(switch_label, callback_data="net:switch"),
+    ])
 
     rows.append([
         InlineKeyboardButton("💾 Save & Close", callback_data="settings_close")
     ])
+    # Back to main menu — mandatory last row per §9 of ui_protection.mdc
     rows.append([
-        InlineKeyboardButton("« Back to Main Menu", callback_data="start")
+        InlineKeyboardButton("⬅️ Back", callback_data="menu:main"),
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -278,11 +352,9 @@ def get_premium_keyboard() -> InlineKeyboardMarkup:
                 callback_data="premium:confirm",
             )
         ],
+        # Back to main menu — mandatory last row per §9 of ui_protection.mdc
         [
-            InlineKeyboardButton(
-                "« Back to Main Menu",
-                callback_data="start",
-            )
+            InlineKeyboardButton("⬅️ Back", callback_data="menu:main"),
         ],
     ])
 
@@ -329,9 +401,119 @@ def governance_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def get_governance_keyboard() -> InlineKeyboardMarkup:
-    """Return the keyboard for the Governance Hub."""
-    keyboard = [
-        [InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu:main")]
+def get_governance_keyboard(
+    *,
+    back_callback: str = "menu:main",
+) -> InlineKeyboardMarkup:
+    """Return the keyboard for the Governance Hub and governance sub-screens.
+
+    Args:
+        back_callback: Last-row Back target. Use ``menu:main`` on the hub root
+            (user arrived via /start or main menu). Use ``governance_menu`` when
+            this keyboard is shown under History, proposals list, staking, etc.,
+            so Back returns to the Governance hub instead of the main menu.
+    """
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏛 Active Proposals", callback_data="gov:list"),
+            InlineKeyboardButton("📜 History", callback_data="gov:history"),
+        ],
+        [
+            InlineKeyboardButton("💧 Liquid Staking", callback_data="gov:stake"),
+            InlineKeyboardButton("📊 My Status", callback_data="gov:status"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data=back_callback),
+        ],
+    ])
+
+
+def build_govlist_keyboard(queued: list, active: list) -> InlineKeyboardMarkup:
+    """Vote <id> buttons for each unique proposal plus governance hub rows."""
+    seen: set[int] = set()
+    ids: list[int] = []
+    for collection in (queued, active):
+        for x in collection:
+            try:
+                pid = int(x)
+            except (TypeError, ValueError):
+                continue
+            if pid not in seen:
+                seen.add(pid)
+                ids.append(pid)
+    ids.sort()
+    ids = ids[:30]
+
+    vote_rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for pid in ids:
+        row.append(
+            InlineKeyboardButton(
+                f"🗳 Vote {pid}",
+                callback_data=f"gov:voteview:{pid}",
+            )
+        )
+        if len(row) >= 2:
+            vote_rows.append(row)
+            row = []
+    if row:
+        vote_rows.append(row)
+
+    hub = get_governance_keyboard(back_callback="governance_menu")
+    return InlineKeyboardMarkup(vote_rows + list(hub.inline_keyboard))
+
+
+def get_proposal_vote_keyboard(proposal_id: int) -> InlineKeyboardMarkup:
+    """Inline keyboard for a single proposal: vote, auto-trade, AI quick, share, back.
+
+    Layout is fixed per ui_protection §4 (P-ECO.4). Callback prefixes: vote:,
+    autotrade:create:, ai_quick:, gov:share:, gov:list.
+    """
+    pid = proposal_id
+    vote_buttons = [
+        InlineKeyboardButton("✅ YES", callback_data=f"vote:YES:{pid}"),
+        InlineKeyboardButton("❌ NO", callback_data=f"vote:NO:{pid}"),
+        InlineKeyboardButton("🤷 ABSTAIN", callback_data=f"vote:ABSTAIN:{pid}"),
     ]
-    return InlineKeyboardMarkup(keyboard)
+    auto_trade_button = [
+        InlineKeyboardButton(
+            "🤖 Create Auto-Trade if Approved",
+            callback_data=f"autotrade:create:{pid}",
+        )
+    ]
+    ai_quick_hint_row = [
+        InlineKeyboardButton(
+            "🎒Staking or 🔄Swap?",
+            callback_data="noop",
+        ),
+    ]
+    ai_quick_row = [
+        InlineKeyboardButton(
+            "🔄stCELO",
+            callback_data=f"ai_quick:ubescelo:{pid}",
+        ),
+        InlineKeyboardButton(
+            "🔄USDm",
+            callback_data=f"ai_quick:mento:{pid}",
+        ),
+        InlineKeyboardButton(
+            "🎒stCELO",
+            callback_data=f"ai_quick:stcelo:{pid}",
+        ),
+    ]
+    share_row = [
+        InlineKeyboardButton(
+            "🔗 Share & Earn",
+            callback_data=f"gov:share:{pid}",
+        ),
+    ]
+    return InlineKeyboardMarkup(
+        [
+            vote_buttons,
+            auto_trade_button,
+            ai_quick_hint_row,
+            ai_quick_row,
+            share_row,
+            [InlineKeyboardButton("⬅️ Back", callback_data="gov:list")],
+        ]
+    )

@@ -110,6 +110,7 @@ class DigestScheduler:
             id="governance_executor",
             replace_existing=True,
             max_instances=1,
+            kwargs={"bot": application.bot},
         )
 
         if not self._scheduler.running:
@@ -161,9 +162,7 @@ class DigestScheduler:
             last_block = int(last_block_str) if last_block_str else None
 
             fetcher = GovernanceFetcher()
-            proposals, new_last_block = await asyncio.to_thread(
-                fetcher.fetch_new_proposals, last_block
-            )
+            proposals, new_last_block = await fetcher.fetch_new_proposals(last_block)
             logger.info("[GOVERNANCE] Found %d new proposals", len(proposals))
 
             if new_last_block is not None:
