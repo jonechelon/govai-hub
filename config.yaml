@@ -206,8 +206,9 @@ erc8004:
   # https://celoscan.io/address/0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
   identity_registry: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
   # Alfajores testnet equivalent (use with celo_rpc.testnet below):
-  # identity_registry: "0x8004A818BFB912233c491871b3d84c89A494BD9e"
-  agent_name: "Celo GovAI Hub"
-  agent_description: "AI-powered Telegram bot delivering daily Celo blockchain digests. Monitors MiniPay, Valora, Ubeswap, Mento, ImpactMarket and more. Premium subscriptions paid in CELO"
+  # identity_registry: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+  agent_name: "GovAI Hub"
+  agent_description: "Network-agnostic AI for Celo governance, DeFi & treasury."
   agent_endpoint: "https://t.me/GovAIHub_bot"
   chain_id: 42220
+  render_base_url: "https://up-to-celo.onrender.com"
