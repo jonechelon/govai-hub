@@ -34,9 +34,9 @@ By combining the speed of **Groq-powered LLMs** with the accessibility of a Tele
 
 ## 🚀 Key Features
 
-*   **🏛️ Governance ELI5 (`/proposal <id>`)**: Get instant AI summaries of complex proposals. No more reading 50-page forum posts—understand the impact and vote YES/NO/ABSTAIN directly.
-*   **💹 AI Trade Suggestions (`/aitrade`)**: Describe your intent (e.g., "I want to swap my CELO for stCELO") and get instant deep links to Ubeswap, Mento, or Jumper.
-*   **🔔 Auto-Trade Alerts**: Attach a trade intent to a proposal. When it passes on-chain, GovAI Hub alerts you with the exact venue links to execute.
+*   **🏛️ Governance ELI5 (`/proposal <id>`)**: Get instant AI summaries of complex proposals. No more reading 50-page forum posts—understand the impact and vote YES/NO/ABSTAIN directly by LockedGold Architecture.
+*   **💹 AI Trade Suggestions (`/aitrade`)**: Turn news into action: GovAI analyzes the context and suggests personalized routes across CELO, stCELO, and stablecoins (USDm, cEUR, USDC), with one-tap deep links to supported Celo venues.
+*   **🔔 Auto-Trade Alerts**: Link a trade intent to a governance proposal; when it is executed on-chain, GovAI sends personalized Celo venue shortcuts so you can complete the trade in your wallet.
 *   **🏦 DAO Treasury Payouts (`/payout`)**: Streamline working group operations with approval-based treasury requests and clean HTML receipts.
 *   **💰 Share & Earn (`/earnings`)**: A built-in referral system that rewards users for growing the Celo governance community.
 *   **🌐 Multi-Network Support**: Seamlessly toggle between **Celo Mainnet**, **Alfajores**, and **Sepolia** for testing and production use.

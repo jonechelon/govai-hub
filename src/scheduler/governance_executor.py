@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import logging
+import os
 from typing import Any
 
 from telegram import Bot
@@ -16,13 +17,38 @@ from src.fetchers.governance_fetcher import GOVERNANCE_ABI_MINIMAL, GOVERNANCE_A
 from src.utils.defi_links import build_venue_links
 from src.utils.env_validator import get_env_or_fail
 from src.utils.gas_manager import (
-    GasPriceTooHighError,
     TransactionSimulationError,
-    get_safe_gas_price,
     simulate_vote_transaction,
 )
 
 logger = logging.getLogger(__name__)
+
+GAS_PRICE_MULTIPLIER = float(os.getenv("GAS_PRICE_MULTIPLIER", "2.0"))
+
+
+async def get_dynamic_gas_params(w3: Web3) -> dict[str, int]:
+    """Return EIP-1559 gas params based on current network conditions."""
+    loop = asyncio.get_event_loop()
+    try:
+        latest = await loop.run_in_executor(None, w3.eth.get_block, "latest")
+        base_fee = latest.get("baseFeePerGas")
+        if base_fee:
+            max_priority = await loop.run_in_executor(None, lambda: w3.eth.max_priority_fee)
+            max_fee = int(base_fee * GAS_PRICE_MULTIPLIER) + int(max_priority)
+            logger.info(
+                "[GAS] Dynamic fee | baseFee=%sgwei maxFee=%sgwei",
+                int(base_fee) // 10**9,
+                int(max_fee) // 10**9,
+            )
+            return {
+                "maxFeePerGas": int(max_fee),
+                "maxPriorityFeePerGas": int(max_priority),
+            }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[GAS] EIP-1559 fetch failed, falling back: %s", exc)
+
+    gas_price = await loop.run_in_executor(None, lambda: w3.eth.gas_price)
+    return {"gasPrice": int(gas_price * GAS_PRICE_MULTIPLIER)}
 
 
 GOVERNANCE_VOTE_ABI: list[dict[str, Any]] = [
@@ -194,7 +220,7 @@ class GovernanceExecutor:
                 await self._notify_executed_auto_trades(bot)
             await self._execute_pending_votes()
         except Exception as exc:  # noqa: BLE001
-            logger.exception("[GOVERNANCE] Executor job failed: %s", exc)
+            logger.error("[GOVERNANCE] Executor error: %s", exc, exc_info=True)
 
     def _verify_governance_wallet(self) -> bool:
         """Verify that GOVERNANCE_PRIVATE_KEY derives the expected GOVERNANCE_DELEGATE_ADDRESS.
@@ -266,20 +292,7 @@ class GovernanceExecutor:
                 len(user_ids),
             )
 
-            # Safety step 1 — gas price ceiling
-            try:
-                gas_price_wei = get_safe_gas_price(self._w3)
-            except GasPriceTooHighError as exc:
-                logger.info(
-                    "[GOVERNANCE] Gas price too high — aborting executor job "
-                    "| current=%.6f gwei | ceiling=%.2f gwei",
-                    exc.gas_price_gwei,
-                    exc.max_allowed_gwei,
-                )
-                # Abort entire job to retry on next cycle.
-                return
-
-            # Safety step 2 — transaction simulation (dry-run)
+            # Safety step 1 — transaction simulation (dry-run)
             try:
                 simulate_vote_transaction(
                     w3=self._w3,
@@ -301,7 +314,6 @@ class GovernanceExecutor:
                 await self._send_vote_transaction(
                     proposal_id=proposal_id,
                     vote_value=vote_value,
-                    gas_price_wei=gas_price_wei,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error(
@@ -315,7 +327,6 @@ class GovernanceExecutor:
         self,
         proposal_id: int,
         vote_value: int,
-        gas_price_wei: int,
     ) -> None:
         """Build, sign, and send the governance vote transaction.
 
@@ -327,6 +338,7 @@ class GovernanceExecutor:
             self._governance_delegate_address,
         )
         chain_id = await self._run_sync(lambda: self._w3.eth.chain_id)
+        gas_params = await get_dynamic_gas_params(self._w3)
 
         tx_dict = self._contract.functions.vote(
             proposal_id,
@@ -336,7 +348,7 @@ class GovernanceExecutor:
                 "from": self._governance_delegate_address,
                 "nonce": nonce,
                 "chainId": chain_id,
-                "gasPrice": gas_price_wei,
+                **gas_params,
             }
         )
 
