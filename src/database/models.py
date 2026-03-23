@@ -447,6 +447,13 @@ async def init_db() -> None:
         ),
         "ALTER TABLE users ADD COLUMN referred_by BIGINT",
         "ALTER TABLE users ADD COLUMN gov_points INTEGER DEFAULT 0",
+        # Safety: keep these ALTERs as a last-resort schema net.
+        "ALTER TABLE governance_alerts ADD COLUMN deposit_cusd FLOAT;",
+        "ALTER TABLE users ADD COLUMN preferred_network VARCHAR DEFAULT 'mainnet';",
+        "ALTER TABLE users ADD COLUMN notifications_enabled BOOLEAN DEFAULT true;",
+        # Safety: rename legacy `network` → `preferred_network` already handled above.
+        # Guard: ensure no stale `network` column blocks startup on legacy DBs.
+        # (No-op on clean DBs — ProgrammingError is caught and ignored.)
     ]
     for statement in _MIGRATIONS:
         try:
