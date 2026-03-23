@@ -1,15 +1,14 @@
-# GovAI Hub - Your Celo Telegram Copilot
+# GovAI Hub - Financial & Political AI Agent
 
 > **Financial & Political AI Agent for Celo Governance, DeFi, and Treasury Coordination.**  
 > *Network-agnostic AI for the Celo ecosystem.*
 
 🎥 **[DROP VIDEO FILE HERE]**
 
----
 
 ## 💡 The Solution: Bridging the Coordination Gap in Celo
 
-Celo's on-chain governance and DeFi ecosystem offer incredible opportunities, but participating often requires navigating complex interfaces and technical documentation. **GovAI Hub** bridges this coordination gap by bringing the entire Celo experience directly into Telegram.
+Celo's on-chain governance and DeFi ecosystem offer incredible opportunities, but participating often requires navigating complex interfaces and technical documentation (fricction 70%). **GovAI Hub** bridges this coordination gap by bringing the entire Celo experience directly into Telegram.
 
 By combining the speed of **Groq-powered LLMs** with the accessibility of a Telegram bot, GovAI Hub empowers users to:
 - Understand and vote on complex governance proposals with one click.
