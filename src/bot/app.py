@@ -149,6 +149,10 @@ def build_application() -> Application:
     application = (
         ApplicationBuilder()
         .token(get_env_or_fail("TELEGRAM_BOT_TOKEN"))
+        .connect_timeout(30.0)
+        .read_timeout(60.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
         # ============================================================================
         # FIXME: TEMPORARY LOCAL POLLING - REVERT BEFORE PRODUCTION DEPLOY
         # The line below is intentionally disabled to allow run_polling() to use

@@ -10,7 +10,7 @@ from web3.exceptions import ContractLogicError
 from src.utils.logger import logger
 
 
-MAX_GAS_PRICE_GWEI = 5.0
+MAX_GAS_PRICE_GWEI = 50.0
 
 
 @dataclass

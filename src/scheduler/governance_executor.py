@@ -148,7 +148,7 @@ class GovernanceExecutor:
 
     def __init__(self) -> None:
         rpc_url = get_env_or_fail("CELO_RPC_URL")
-        self._w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+        self._w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
 
         # Governance wallet — dedicated to signing on-chain vote transactions.
         # Kept strictly separate from BOT_WALLET (treasury) for security isolation.
