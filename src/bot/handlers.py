@@ -196,13 +196,14 @@ def admin_only(handler):
 
 # Protected copy — do not alter without explicit review in ui_protection.mdc
 WELCOME_MESSAGE = (
-    "<b>🤖 GovAI Hub — Financial &amp; Political AI Agent</b>\n\n"
-    "<i>Network-agnostic AI for Celo governance, DeFi &amp; treasury.</i>\n\n"
+    "🤖 GovAI Hub — Financial & Political AI Agent\n\n"
+    "Welcome! Track governance and grow with Share & Earn.\n\n"
     "• 🗳️ Vote on active proposals\n"
     "• 🌱 Liquid staking with stCELO\n"
     "• 🔔 Auto-Trade alerts when proposals pass\n"
-    "• 🏛️ DAO Treasury payouts (groups)\n\n"
-    "Send your wallet address (0x\u2026) to get started."
+    "• 💰 Share & Earn rewards via /earnings\n\n"
+    "Use /earnings to view your referral rewards.\n"
+    "Send your wallet address (0x...) to get started."
 )
 
 # Protected copy — do not alter without explicit review in ui_protection.mdc (§17 — On-chain hub)
@@ -450,7 +451,6 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await update.message.reply_text(
         WELCOME_MESSAGE,
-        parse_mode=ParseMode.HTML,
         reply_markup=get_main_keyboard(
             preferred_network=chain_net,
             notifications_enabled=notifications_enabled,
