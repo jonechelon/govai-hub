@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # ⚠️ Confirm this address at https://celoscan.io before production use
 GOVERNANCE_ADDRESS = Web3.to_checksum_address(
-    "0xD533Ca259b330c7A88f74E000a3FaEa2d63B7972"
+    "0xAA963FC97281d9632d96700aB62A4D1340F9a28a"
 )
 
 GOVERNANCE_ABI_MINIMAL: list[dict[str, Any]] = [

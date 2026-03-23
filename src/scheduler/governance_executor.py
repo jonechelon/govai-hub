@@ -56,11 +56,10 @@ GOVERNANCE_VOTE_ABI: list[dict[str, Any]] = [
         "constant": False,
         "inputs": [
             {"name": "proposalId", "type": "uint256"},
-            {"name": "index", "type": "uint256"},
-            {"name": "value", "type": "uint256"},
+            {"name": "value", "type": "uint8"},
         ],
         "name": "vote",
-        "outputs": [{"name": "", "type": "bool"}],
+        "outputs": [],
         "payable": False,
         "stateMutability": "nonpayable",
         "type": "function",
@@ -343,7 +342,6 @@ class GovernanceExecutor:
 
         tx_dict = self._contract.functions.vote(
             proposal_id,
-            0,
             vote_value,
         ).build_transaction(
             {
